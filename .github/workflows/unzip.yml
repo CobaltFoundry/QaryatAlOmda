@@ -1,0 +1,23 @@
+name: Unzip uploaded archive
+on:
+  push:
+    paths:
+      - 'omda.zip'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract omda.zip
+        run: |
+          if [ ! -f omda.zip ]; then exit 0; fi
+          unzip -o omda.zip
+          rm omda.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Extract omda.zip"
+          git push
