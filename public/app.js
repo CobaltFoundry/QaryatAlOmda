@@ -7,6 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
+const APP_VERSION = '0.3';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -474,6 +475,18 @@ tapBtn.addEventListener('click', (e) => {
   }
 });
 
+// The mayor's picture replaces the drawn tarboosh on the tap button, if /img/assets/mayor.jpg exists.
+function loadMayor() {
+  if (!ASSET_IMAGES) return;
+  const img = new Image();
+  img.alt = '';
+  img.onload = () => {
+    tapBtn.replaceChildren(img);
+    tapBtn.classList.add('photo');
+  };
+  img.src = `/img/assets/mayor.${ASSET_IMAGE_EXT}`;
+}
+
 // ---- Navigation ----------------------------------------------------------------
 function goTo(next) {
   tab = next;
@@ -554,6 +567,8 @@ async function boot() {
   try {
     strings = await (await fetch('/strings.json')).json();
   } catch {}
+  $('#ver').textContent = 'نسخة ' + ar(APP_VERSION);
+  loadMayor();
   setInterval(tick, 100);
   setInterval(refreshAffordable, 400);
   setInterval(() => flushTaps(), 8000);
