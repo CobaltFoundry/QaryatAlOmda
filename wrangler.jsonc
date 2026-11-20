@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "omda",
+  "name": "qaryatalomda",
   "main": "src/worker/index.ts",
   "compatibility_date": "2025-11-01",
   "assets": {
