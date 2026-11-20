@@ -4,8 +4,24 @@
 import { formatNumber, formatRate, toArabicDigits } from './format.js';
 
 const BOT_USERNAME = 'QaryatAlOmdaBot';
-/** Flip to true after adding /img/assets/<key>.webp files (one per asset key). */
+/** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
+const ASSET_IMAGE_EXT = 'jpg';
+
+// Remember which pictures do not exist (for a day) so we do not request them again and again.
+const MISS_KEY = 'omda_img_miss_v1';
+let imgMiss = {};
+try {
+  imgMiss = JSON.parse(localStorage.getItem(MISS_KEY) || '{}');
+} catch {}
+const isMiss = (key) => Date.now() - (imgMiss[key] || 0) < 24 * 3600_000;
+function markMiss(key) {
+  imgMiss[key] = Date.now();
+  try {
+    localStorage.setItem(MISS_KEY, JSON.stringify(imgMiss));
+  } catch {}
+}
+const imgReady = new Map(); // key -> loaded <img>, reused on every re-render
 
 const tg = window.Telegram?.WebApp;
 const initData = tg?.initData ?? '';
@@ -181,11 +197,20 @@ function assetIcon(a) {
   const box = h('div', { class: 'ico' });
   box.style.background = COLORS[a.category];
   box.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[a.category]}</svg>`;
-  if (ASSET_IMAGES) {
-    const img = new Image();
-    img.alt = '';
-    img.onload = () => box.replaceChildren(img);
-    img.src = `/img/assets/${a.key}.webp`;
+  if (ASSET_IMAGES && !isMiss(a.key)) {
+    const ready = imgReady.get(a.key);
+    if (ready) {
+      box.replaceChildren(ready.cloneNode(true));
+    } else {
+      const img = new Image();
+      img.alt = '';
+      img.onload = () => {
+        imgReady.set(a.key, img);
+        box.replaceChildren(img);
+      };
+      img.onerror = () => markMiss(a.key);
+      img.src = `/img/assets/${a.key}.${ASSET_IMAGE_EXT}`;
+    }
   }
   return box;
 }
