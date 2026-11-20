@@ -25,13 +25,13 @@
 
 ### 2) Cloudflare
 1. **Workers & Pages ← Create ← Import a repository** واختار GitHub والـ Repository.
-2. اسم المشروع: `omda`. سيب الـ Build command فاضي، والـ Deploy command زي ما هو (`npx wrangler deploy`).
-3. اضغط **Save and Deploy**. هيتعمل رابط شكله `https://omda.<اسمك>.workers.dev`.
+2. اسم المشروع لازم يطابق `name` في `wrangler.jsonc` (دلوقتي `qaryatalomda`). سيب الـ Build command فاضي، والـ Deploy command زي ما هو (`npx wrangler deploy`).
+3. اضغط **Save and Deploy**. هيتعمل رابط شكله `https://qaryatalomda.<اسمك>.workers.dev`.
 4. من **Settings ← Variables and Secrets** ضيف سرّين (نوع Secret):
    - `BOT_TOKEN`: توكن البوت من @BotFather.
    - `WEBHOOK_SECRET`: أي كلمة سرّ عشوائية من حروف إنجليزي وأرقام و `_` أو `-` (مثال: `omda_9xK2pLq7`).
 5. افتح الرابط ده مرة واحدة في المتصفح:
-   `https://omda.<اسمك>.workers.dev/setup?key=<WEBHOOK_SECRET>`
+   `https://qaryatalomda.<اسمك>.workers.dev/setup?key=<WEBHOOK_SECRET>`
    لو ظهر `"ok": true` يبقى البوت اتربط وزرار "العب" ظهر.
 6. افتح البوت في تليجرام وابعت `/start`.
 
@@ -65,4 +65,4 @@
 npm test            # ٤٤ اختبار: المحرك، البيانات، الـ API، تليجرام، SQL، البوت
 npm run typecheck   # فحص الأنواع (TypeScript)
 ```
-المحرك (`src/engine`) بدون أي اعتماد على Cloudflare أو تليجرام، فبيتختبر بسهولة وبيتنقل لأي استضافة تانية. 
+المحرك (`src/engine`) بدون أي اعتماد على Cloudflare أو تليجرام، فبيتختبر بسهولة وبيتنقل لأي استضافة تانية.
