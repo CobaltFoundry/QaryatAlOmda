@@ -5,7 +5,7 @@ import { formatNumber, formatRate, toArabicDigits } from './format.js';
 
 const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Flip to true after adding /img/assets/<key>.webp files (one per asset key). */
-const ASSET_IMAGES = false;
+const ASSET_IMAGES = true;
 
 const tg = window.Telegram?.WebApp;
 const initData = tg?.initData ?? '';
