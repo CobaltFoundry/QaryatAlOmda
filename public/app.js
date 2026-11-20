@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.3';
+const APP_VERSION = '0.4';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -487,6 +487,68 @@ function loadMayor() {
   img.src = `/img/assets/mayor.${ASSET_IMAGE_EXT}`;
 }
 
+// ---- First-time intro -----------------------------------------------------------
+const INTRO_KEY = 'omda_intro_v1';
+const SLIDES = [
+  {
+    icon: '<svg viewBox="0 0 120 120"><path d="M30 92 L40 38 Q60 28 80 38 L90 92 Z" fill="#B3261E"/><rect x="26" y="88" width="68" height="12" rx="4" fill="#7A1713"/><path d="M60 33 Q76 28 82 46" stroke="#0F2A2B" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="83" cy="52" r="5" fill="#0F2A2B"/></svg>',
+    title: 'دوس على الطربوش',
+    text: 'كل ضغطة بتجيب فلوس. ابدأ بالضغط لحد ما تجمع ١٥ جنيه، وتشتري أول توك توك.',
+  },
+  {
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="#0F2A2B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg>',
+    title: 'اشتري أصول والفلوس تيجي لوحدها',
+    text: 'توك توك، عربية فول، عمارة، مصنع... كل أصل بيجيب فلوس كل ثانية، حتى وانت قافل اللعبة (لحد ساعتين في الأول). ارجع كل شوية واستلم فلوسك.',
+  },
+  {
+    icon: '<svg viewBox="0 0 24 24" fill="#0F2A2B"><path d="M12 2l3 6.5 7 .9-5.2 4.8 1.4 7L12 17.8 5.8 21.2l1.4-7L2 9.4l7-.9z"/></svg>',
+    title: 'ورّث وكبّر لحد القصر الجمهوري',
+    text: 'لما تجمع مليار جنيه، ورّث الكرسي للولد وابدأ من جديد بنجوم تقوّيك للأبد. وادعُ صاحبك: انت وهو تاخدوا ساعة دخل مضاعف.',
+  },
+];
+let slide = 0;
+
+function renderSlide() {
+  const s = SLIDES[slide];
+  const last = slide === SLIDES.length - 1;
+  $('#introIcon').innerHTML = s.icon;
+  $('#introTitle').textContent = s.title;
+  $('#introText').textContent = s.text;
+  $('#introDots').replaceChildren(...SLIDES.map((_, i) => h('i', { class: i === slide ? 'on' : '' })));
+  $('#introNext').textContent = last ? 'يلا نبدأ' : 'التالي';
+  $('#introSkip').hidden = last;
+}
+function showIntro() {
+  slide = 0;
+  renderSlide();
+  $('#intro').hidden = false;
+  $('#introNext').focus();
+}
+function closeIntro() {
+  $('#intro').hidden = true;
+  try {
+    localStorage.setItem(INTRO_KEY, '1');
+  } catch {}
+}
+function introSeen() {
+  try {
+    return localStorage.getItem(INTRO_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+$('#introNext').addEventListener('click', () => {
+  if (slide < SLIDES.length - 1) {
+    slide++;
+    renderSlide();
+  } else closeIntro();
+});
+$('#introSkip').addEventListener('click', closeIntro);
+$('#helpBtn').addEventListener('click', showIntro);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#intro').hidden) closeIntro();
+});
+
 // ---- Navigation ----------------------------------------------------------------
 function goTo(next) {
   tab = next;
@@ -574,6 +636,7 @@ async function boot() {
   setInterval(() => flushTaps(), 8000);
   try {
     await sync(true);
+    if (!introSeen()) showIntro();
   } catch {
     showFatal('مش قادر أوصل للسيرفر، جرب تاني بعد شوية');
   }
