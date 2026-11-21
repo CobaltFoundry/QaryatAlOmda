@@ -16,6 +16,7 @@ import type { GameData, GameState } from '../engine/types.ts';
 import type { Store } from './store.ts';
 import { validateInitData } from './telegram.ts';
 import type { TgUser } from './telegram.ts';
+import { adminOverview, adminResolve } from './admin.ts';
 import { buildView } from './view.ts';
 import type { AdsConfig } from './view.ts';
 import { claimAd, normalizePhone, requestWithdraw, startAd } from '../engine/wallet.ts';
@@ -27,6 +28,8 @@ export interface ApiDeps {
   now: number;
   data: GameData;
   ads?: AdsConfig;
+  /** Telegram ids allowed to use the in-app admin screen, and how to message a player. */
+  admin?: { ids: number[]; notify: (userId: number, text: string) => Promise<void> };
   /** Ticket id generator; tests can pin it. */
   newId?: () => string;
 }
@@ -54,6 +57,11 @@ function unlockedIds(state: GameState, data: GameData): Set<number> {
   return new Set(data.assets.filter((a) => isAssetUnlocked(state, a)).map((a) => a.id));
 }
 
+const adsFor = (deps: ApiDeps, user: TgUser): AdsConfig => ({
+  ...(deps.ads ?? { live: false, zone: '' }),
+  isAdmin: deps.admin?.ids.includes(user.id) ?? false,
+});
+
 async function mutate(
   deps: ApiDeps,
   user: TgUser,
@@ -73,7 +81,7 @@ async function mutate(
 
     const acc = accrue(row.state, data, now);
     const out = fn(acc.state, acc);
-    if (!out.ok) return json({ ok: false, error: out.error, view: buildView(acc.state, data, now, deps.ads) });
+    if (!out.ok) return json({ ok: false, error: out.error, view: buildView(acc.state, data, now, adsFor(deps, user)) });
 
     const saved = await store.save({ ...row, name, state: out.state }, now);
     if (!saved) continue; // someone else wrote first: reload and retry
@@ -81,7 +89,7 @@ async function mutate(
     const before = unlockedIds(acc.state, data);
     const newly = data.assets.filter((a) => isAssetUnlocked(out.state, a) && !before.has(a.id)).map((a) => a.name);
     const more = after ? await after(out.extra) : undefined;
-    return json({ ok: true, view: buildView(out.state, data, now, deps.ads), newlyUnlocked: newly, ...out.extra, ...more });
+    return json({ ok: true, view: buildView(out.state, data, now, adsFor(deps, user)), newlyUnlocked: newly, ...out.extra, ...more });
   }
   return json({ ok: false, error: 'busy' }, 409);
 }
@@ -180,7 +188,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/ad/start': {
       const kind = body.kind === 'points' || body.kind === 'boost' ? (body.kind as AdKind) : null;
       if (!kind) return bad();
-      const id = (deps.newId ?? (() => crypto.randomUUID()))();
+      const id = (deps.newId ?? (() => crypto.randomUUID().replace(/-/g, '')))();
       return mutate(deps, user, (s) => {
         const r = startAd(s, kind, now, id, deps.ads?.live ?? false);
         return r.ok ? { ok: true, state: r.state, extra: { ticket: r.ticket } } : r;
@@ -191,7 +199,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       if (typeof body.ticket !== 'string') return bad();
       const ticket = body.ticket;
       return mutate(deps, user, (s) => {
-        const r = claimAd(s, ticket, now, deps.ads?.live ?? false);
+        const r = claimAd(s, ticket, now, deps.ads?.live ?? false, deps.ads?.verified ?? false);
         return r.ok ? { ok: true, state: r.state, extra: { kind: r.kind, points: r.points } } : r;
       });
     }
@@ -224,6 +232,16 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
           return { withdrawalId: id };
         },
       );
+    }
+
+    case '/api/admin/overview': {
+      if (!deps.admin?.ids.includes(user.id)) return json({ ok: false, error: 'forbidden' }, 403);
+      return json(await adminOverview(deps.store, now));
+    }
+
+    case '/api/admin/resolve': {
+      if (!deps.admin?.ids.includes(user.id)) return json({ ok: false, error: 'forbidden' }, 403);
+      return json(await adminResolve({ store: deps.store, now, notify: deps.admin.notify }, body));
     }
 
     case '/api/leaderboard': {

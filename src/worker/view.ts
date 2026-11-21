@@ -28,6 +28,10 @@ export interface AdsConfig {
   live: boolean;
   /** Monetag zone id (secret MONETAG_ZONE). */
   zone: string;
+  /** Monetag postbacks are configured: points are credited by the postback only. */
+  verified?: boolean;
+  /** The viewer is an admin (shows the admin screen). */
+  isAdmin?: boolean;
 }
 
 /** Everything the Mini App needs to draw a screen. The client never computes game rules. */
@@ -40,6 +44,7 @@ export function buildView(state: GameState, data: GameData, now: number, ads: Ad
 
   return {
     now,
+    isAdmin: ads.isAdmin ?? false,
     wallet: {
       points: state.walletPoints,
       pointsPerEgp: POINTS_PER_EGP,
@@ -49,6 +54,7 @@ export function buildView(state: GameState, data: GameData, now: number, ads: Ad
       adsPerDay: POINT_ADS_PER_DAY,
       adLive: ads.live,
       adZone: ads.zone,
+      verified: ads.verified ?? false,
       adReadyAt: state.lastAdAt + AD_COOLDOWN_MS,
       nextWithdrawAt: state.lastWithdrawAt ? state.lastWithdrawAt + WITHDRAW_INTERVAL_MS : 0,
     },

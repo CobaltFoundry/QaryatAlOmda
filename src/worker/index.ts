@@ -1,4 +1,5 @@
 import { handleAdmin } from './admin.ts';
+import { handlePostback } from './postback.ts';
 import { handleApi } from './api.ts';
 import { handleUpdate, setupBot } from './bot.ts';
 import type { TgUpdate } from './bot.ts';
@@ -17,6 +18,10 @@ export interface Env {
   ADS_LIVE?: string;
   /** Secret, optional: Monetag zone id for the rewarded ad. */
   MONETAG_ZONE?: string;
+  /** Secret, optional: long random string; the same value goes in the Monetag postback URL. */
+  POSTBACK_SECRET?: string;
+  /** Secret, optional: your Telegram user id (several allowed, comma separated). Send /id to the bot to see it. */
+  ADMIN_IDS?: string;
 }
 
 let schemaReady: Promise<void> | null = null;
@@ -43,6 +48,14 @@ const tgCall = (token: string) => async (method: string, body: unknown): Promise
   return res.json();
 };
 
+function adsConfig(env: Env) {
+  return {
+    live: env.ADS_LIVE === '1' && !!env.MONETAG_ZONE,
+    zone: (env.MONETAG_ZONE ?? '').replace(/[^0-9]/g, ''),
+    verified: !!env.POSTBACK_SECRET,
+  };
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -59,7 +72,22 @@ export default {
         botToken: env.BOT_TOKEN,
         now: Date.now(),
         data: gameData,
-        ads: { live: env.ADS_LIVE === '1' && !!env.MONETAG_ZONE, zone: (env.MONETAG_ZONE ?? '').replace(/[^0-9]/g, '') },
+        ads: adsConfig(env),
+        admin: {
+          ids: (env.ADMIN_IDS ?? '').split(',').map((x) => Number(x.trim())).filter((n) => Number.isSafeInteger(n) && n > 0),
+          notify: async (userId, text) => void (await tgCall(env.BOT_TOKEN)('sendMessage', { chat_id: userId, text })),
+        },
+      });
+    }
+
+    if (path === '/postback') {
+      const st = store(env);
+      await schemaReady;
+      return handlePostback(req, {
+        store: st,
+        now: Date.now(),
+        secret: env.POSTBACK_SECRET ?? '',
+        live: adsConfig(env).live,
       });
     }
 

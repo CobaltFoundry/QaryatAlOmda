@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.6.1';
+const APP_VERSION = '0.7';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -196,6 +196,7 @@ function renderHeader() {
   const user = tg?.initDataUnsafe?.user;
   $('#whoName').textContent = user?.first_name || 'عمدة';
   $('#whoLevel').textContent = 'توريث ' + ar(V.prestigeLevel);
+  $('#adminBtn').hidden = !V.isAdmin;
   $('#starsChip').textContent = fmt(V.stars) + ' نجمة';
   $('#tapInfo').textContent = fmt(V.tapPower) + ' جنيه في الضغطة  ·  أوفلاين لحد ' + ar(V.offlineCapHours) + ' ساعة';
   const left = V.boostClaimsLeft;
@@ -374,6 +375,7 @@ function renderTab() {
   else if (tab === 'upgrades') renderUpgrades();
   else if (tab === 'prestige') renderPrestige();
   else if (tab === 'wallet') renderWallet();
+  else if (tab === 'admin') renderAdmin();
 }
 
 function refreshAffordable() {
@@ -447,7 +449,7 @@ function loadAdSdk(zone) {
 }
 
 /** Shows an ad. Resolves true only if the network says it was completed. With no ad zone there is nothing to show. */
-async function showRewardedAd() {
+async function showRewardedAd(ymid) {
   const zone = V?.wallet?.adZone;
   if (!zone) return true;
   const show = await loadAdSdk(zone);
@@ -456,7 +458,7 @@ async function showRewardedAd() {
     return false;
   }
   try {
-    await show({ ymid: String(tg?.initDataUnsafe?.user?.id ?? '') });
+    await show({ ymid });
     return true;
   } catch (e) {
     // Show Monetag's own reason so a misconfigured zone is easy to spot.
@@ -467,15 +469,35 @@ async function showRewardedAd() {
 }
 
 let adBusy = false;
-/** start ticket -> show ad -> claim. Returns the claim response or null. */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/**
+ * start ticket -> show ad -> reward.
+ * The ymid we give Monetag ties the paid impression to this player. When postbacks are set up
+ * (wallet.verified) points arrive from Monetag's server, so we wait for them; otherwise we claim.
+ */
 async function watchAd(kind) {
   if (adBusy) return null;
   adBusy = true;
   try {
     const st = await act('/api/ad/start', { kind });
     if (!st) return null;
-    if (!(await showRewardedAd())) {
+    const uid = tg?.initDataUnsafe?.user?.id ?? 0;
+    const ymid = (kind === 'points' ? 'p_' : 'b_') + uid + '_' + st.ticket;
+    if (!(await showRewardedAd(ymid))) {
       toast('الإعلان ماكملش، جرب تاني');
+      return null;
+    }
+    if (kind === 'points' && V.wallet.verified) {
+      const before = V.wallet.points;
+      for (let i = 0; i < 10; i++) {
+        await sleep(2500);
+        const w = await act('/api/wallet');
+        if (w) {
+          wdHistory = w.withdrawals || wdHistory;
+          if (V.wallet.points > before) return { points: V.wallet.points - before };
+        }
+      }
+      toast('الإعلان لسه بيتأكد، النقاط هتوصل خلال دقايق');
       return null;
     }
     return await act('/api/ad/claim', { ticket: st.ticket });
@@ -490,6 +512,90 @@ async function claimBoost() {
     haptic('success');
     toast(say('boost_on', { minutes: ar(30) }));
   }
+}
+
+// ---- Admin (only for the owner; the server checks ADMIN_IDS) -----------------
+let adminData = null;
+const agoText = (ms) => {
+  const hrs = Math.floor(ms / 3_600_000);
+  return hrs < 1 ? 'من أقل من ساعة' : hrs < 48 ? 'من ' + ar(hrs) + ' ساعة' : 'من ' + ar(Math.floor(hrs / 24)) + ' يوم';
+};
+
+async function loadAdmin() {
+  await flushTaps();
+  try {
+    adminData = await call('/api/admin/overview');
+  } catch {
+    return toast('النت واقف، جرب تاني');
+  }
+  renderAdmin();
+}
+
+async function adminAct(id, action, note) {
+  const r = await call('/api/admin/resolve', { id, action, note });
+  toast(r.ok ? 'تم' : r.error === 'on_hold' ? 'لسه مقفول للمراجعة' : 'حصل خطأ');
+  loadAdmin();
+}
+
+function renderAdmin() {
+  const d = adminData;
+  const box = $('#adminBox');
+  if (!d || !d.ok) return box.replaceChildren(h('div', { class: 'card', text: 'مش مسموح' }));
+  const s = d.stats;
+  const stat = (label, value) => h('div', { class: 'card stat' }, h('small', { text: label }), h('b', { text: value }));
+  const usd = s.revenueUsd;
+  const cost = s.owedEgp + s.paidEgp;
+  const fx = Number(localStorage.getItem('omda_fx') || 50);
+  const margin = usd * fx - cost;
+  const pending = d.pending.map((w) => {
+    const hold = d.now - w.createdAt < d.holdMs;
+    return h(
+      'div',
+      { class: 'card' },
+      h('div', { text: w.name + '  ·  ' + agoText(d.now - w.createdAt) }),
+      h('div', { class: 'phone', text: w.phone }),
+      h('div', { text: ar((w.points / d.pointsPerEgp).toFixed(2)) + ' جنيه' }),
+      hold ? h('small', { text: 'مقفول للمراجعة ٤٨ ساعة' }) : null,
+      h(
+        'div',
+        { class: 'btnrow' },
+        h('button', { class: 'btn', text: 'انسخ الرقم', onclick: () => { navigator.clipboard?.writeText(w.phone); toast('اتنسخ'); } }),
+        h('button', {
+          class: 'btn',
+          text: 'اتشحن ✅',
+          disabled: hold,
+          onclick: async () => {
+            if (await confirmAsk('أكدت إنك شحنت ' + ar(w.phone) + ' بمبلغ ' + ar((w.points / d.pointsPerEgp).toFixed(2)) + ' جنيه؟')) adminAct(w.id, 'paid', '');
+          },
+        }),
+        h('button', {
+          class: 'btn off',
+          text: 'ارفض',
+          onclick: async () => {
+            if (await confirmAsk('رفض الطلب وإرجاع النقاط للاعب؟')) adminAct(w.id, 'rejected', '');
+          },
+        }),
+      ),
+    );
+  });
+  const recent = d.recent.map((w) =>
+    h('div', { class: 'row' }, h('div', { class: 'txt' }, h('b', { text: (w.status === 'paid' ? '✅ ' : '❌ ') + w.name }), h('small', { text: w.phone + ' · ' + ar((w.points / d.pointsPerEgp).toFixed(2)) + ' جنيه' }))),
+  );
+  box.replaceChildren(
+    h(
+      'div',
+      { class: 'stats' },
+      stat('لاعبين', ar(s.players)),
+      stat('أحداث إعلانات', ar(s.adEvents)),
+      stat('إيراد Monetag ($)', ar(usd.toFixed(4))),
+      stat('اتدفع + علينا (جنيه)', ar(cost.toFixed(2))),
+    ),
+    h('div', { class: 'card', text: 'صافي تقريبي بسعر دولار ' + ar(fx) + ' جنيه: ' + ar(margin.toFixed(2)) + ' جنيه ' + (margin >= 0 ? '(ربح)' : '(خسارة)') }),
+    h('h3', { class: 'section-title', text: 'طلبات السحب (' + ar(d.pending.length) + ')' }),
+    h('div', { class: 'list' }, pending.length ? pending : [h('small', { text: 'مفيش طلبات' })]),
+    h('h3', { class: 'section-title', text: 'آخر اللي اتعالج' }),
+    h('div', { class: 'list' }, recent.length ? recent : [h('small', { text: 'لسه مفيش' })]),
+  );
 }
 
 let wdHistory = [];
@@ -684,6 +790,7 @@ function goTo(next) {
   $('main').scrollTop = 0;
   if (next === 'rank') renderRank();
   else if (next === 'wallet') loadWallet();
+  else if (next === 'admin') loadAdmin();
   else renderTab();
 }
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => goTo(b.dataset.go)));
@@ -703,6 +810,7 @@ $('#adBtn').addEventListener('click', async () => {
   }
 });
 $('#withdrawBtn').addEventListener('click', doWithdraw);
+$('#adminBtn').addEventListener('click', () => goTo('admin'));
 $('#inviteBtn').addEventListener('click', invite);
 $('#offlineOk').addEventListener('click', () => ($('#offline').hidden = true));
 

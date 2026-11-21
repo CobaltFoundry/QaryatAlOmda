@@ -66,6 +66,11 @@ export async function handleUpdate(update: TgUpdate, deps: BotDeps): Promise<voi
   const command = (parts[0] ?? '').split('@')[0].toLowerCase();
   const chatId = msg.chat.id;
 
+  if (command === '/id') {
+    await call('sendMessage', { chat_id: chatId, text: `رقمك على تليجرام: ${msg.from.id}` });
+    return;
+  }
+
   if (command === '/help') {
     await call('sendMessage', { chat_id: chatId, text: HELP_TEXT, reply_markup: playKeyboard(origin) });
     return;

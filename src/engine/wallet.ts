@@ -45,7 +45,27 @@ export function startAd(state: GameState, kind: AdKind, now: number, ticketId: s
   return { ok: true, state: { ...state, ticketId, ticketKind: kind, ticketAt: now }, ticket: ticketId };
 }
 
-export function claimAd(state: GameState, ticketId: string, now: number, live: boolean): Result<{ kind: AdKind; points: number }> {
+/**
+ * Credits one Monetag-confirmed (paid) impression. Called by the postback, never by the client.
+ * Returns null when the daily cap is already used up (the ad still earned us money, the player just gets nothing more today).
+ */
+export function creditAdPoints(state: GameState, now: number): GameState | null {
+  const today = dayOf(now);
+  const count = state.adDay === today ? state.adCount : 0;
+  if (count >= POINT_ADS_PER_DAY) return null;
+  return {
+    ...state,
+    adDay: today,
+    adCount: count + 1,
+    lastAdAt: now,
+    lifetimeAds: state.lifetimeAds + 1,
+    walletPoints: state.walletPoints + AD_REWARD_POINTS,
+    lifetimePoints: state.lifetimePoints + AD_REWARD_POINTS,
+  };
+}
+
+/** `verified`: Monetag postbacks are set up, so points come only from the postback, never from the client. */
+export function claimAd(state: GameState, ticketId: string, now: number, live: boolean, verified = false): Result<{ kind: AdKind; points: number }> {
   if (!state.ticketId || state.ticketId !== ticketId) return { ok: false, error: 'bad_ticket' };
   const age = now - state.ticketAt;
   if (age > AD_TICKET_TTL_MS) return { ok: false, error: 'expired' };
@@ -59,6 +79,7 @@ export function claimAd(state: GameState, ticketId: string, now: number, live: b
     return r.ok ? { ok: true, state: r.state, kind, points: 0 } : r;
   }
   if (!live) return { ok: false, error: 'ads_off' };
+  if (verified) return { ok: false, error: 'bad_ticket' };
   const today = dayOf(now);
   const count = base.adDay === today ? base.adCount : 0;
   if (count >= POINT_ADS_PER_DAY) return { ok: false, error: 'limit' };

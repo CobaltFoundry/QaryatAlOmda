@@ -33,7 +33,16 @@ export interface Withdrawal {
   resolvedAt: number;
   note: string;
 }
+export interface AdEvent {
+  ymid: string;
+  event: string;
+  userId: number;
+  priceUsd: number;
+  createdAt: number;
+}
 export interface Stats {
+  revenueUsd: number;
+  adEvents: number;
   players: number;
   walletPoints: number;
   lifetimePoints: number;
@@ -59,6 +68,8 @@ export interface Store {
   userWithdrawals(userId: number, limit: number): Promise<Withdrawal[]>;
   /** True if a non-rejected request for this phone exists from a different player. */
   phoneTakenByOther(phone: string, userId: number): Promise<boolean>;
+  /** Records a Monetag postback. False if this (ymid, event) was already recorded (retries, duplicates). */
+  addAdEvent(e: AdEvent): Promise<boolean>;
   stats(): Promise<Stats>;
 }
 
@@ -90,6 +101,14 @@ const SCHEMA = [
     created_at INTEGER NOT NULL,
     resolved_at INTEGER NOT NULL DEFAULT 0,
     note TEXT NOT NULL DEFAULT ''
+  )`,
+  `CREATE TABLE IF NOT EXISTS ad_events (
+    ymid TEXT NOT NULL,
+    event TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    price REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (ymid, event)
   )`,
   'CREATE INDEX IF NOT EXISTS idx_wd_status ON withdrawals (status, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_wd_phone ON withdrawals (phone)',
@@ -210,7 +229,17 @@ export class D1Store implements Store {
       .first();
     return r !== null;
   }
+  async addAdEvent(e: AdEvent): Promise<boolean> {
+    const r = await this.db
+      .prepare('INSERT OR IGNORE INTO ad_events (ymid, event, user_id, price, created_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(e.ymid, e.event, e.userId, e.priceUsd, e.createdAt)
+      .run();
+    return (r.meta?.changes ?? 0) === 1;
+  }
   async stats(): Promise<Stats> {
+    const rev = await this.db
+      .prepare('SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS usd FROM ad_events')
+      .first<{ n: number; usd: number }>();
     const p = await this.db
       .prepare(
         `SELECT COUNT(*) AS n,
@@ -224,6 +253,8 @@ export class D1Store implements Store {
       .all<{ status: string; pts: number }>();
     const by = (st: string) => s.results.find((x) => x.status === st)?.pts ?? 0;
     return {
+      revenueUsd: rev?.usd ?? 0,
+      adEvents: rev?.n ?? 0,
       players: p?.n ?? 0,
       walletPoints: p?.w ?? 0,
       lifetimePoints: p?.lp ?? 0,
@@ -289,10 +320,19 @@ export class MemoryStore implements Store {
   async phoneTakenByOther(phone: string, userId: number) {
     return this.wds.some((w) => w.phone === phone && w.userId !== userId && w.status !== 'rejected');
   }
+  events = new Map<string, AdEvent>();
+  async addAdEvent(e: AdEvent): Promise<boolean> {
+    const k = e.ymid + '|' + e.event;
+    if (this.events.has(k)) return false;
+    this.events.set(k, { ...e });
+    return true;
+  }
   async stats(): Promise<Stats> {
     const rows = [...this.rows.values()];
     const sum = (st: WithdrawStatus) => this.wds.filter((w) => w.status === st).reduce((a, w) => a + w.points, 0);
     return {
+      revenueUsd: [...this.events.values()].reduce((a, e) => a + e.priceUsd, 0),
+      adEvents: this.events.size,
       players: rows.length,
       walletPoints: rows.reduce((a, r) => a + r.state.walletPoints, 0),
       lifetimePoints: rows.reduce((a, r) => a + r.state.lifetimePoints, 0),

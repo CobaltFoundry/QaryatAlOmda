@@ -61,7 +61,13 @@
 2. في Cloudflare (Worker → Settings → Variables and Secrets) ضيف Secret اسمه `MONETAG_ZONE` وقيمته الرقم.
 3. ضيف Secret تاني `ADS_LIVE` قيمته `1`. من غيره السيرفر مابيدفعش أي نقاط.
 
-**الإدارة:** افتح `https://<الworker>/admin?key=<WEBHOOK_SECRET>`. هتشوف طلبات السحب ورقم الموبايل. اشحن الرقم من محفظتك واضغط "اتشحن" والبوت يبعت للاعب إشعار.
+**التحقق الحقيقي من الإعلان (Postback):**
+1. ضيف Secret اسمه `POSTBACK_SECRET` وقيمته نص عشوائي طويل (حروف وأرقام).
+2. في Monetag افتح الـZone، في خانة **Postback URL** حط:
+   `https://<الworker>/postback?secret=<نفس القيمة>&ymid={ymid}&zone_id={zone_id}&event_type={event_type}&reward_event_type={reward_event_type}&estimated_price={estimated_price}&telegram_id={telegram_id}`
+3. من اللحظة دي النقاط بتتدّي من سيرفر Monetag بس، واللاعب مابيقدرش يتحايل. وصفحة الإدارة بتعرض إيراد Monetag الحقيقي.
+
+**الإدارة داخل اللعبة:** ابعت `/id` للبوت عشان يقولك رقمك، وضيفه في Secret اسمه `ADMIN_IDS`. بعدها هيظهر لك زرار "إ" فوق في اللعبة (ليك إنت بس). فيه طلبات السحب ورقم الموبايل. اشحن الرقم من محفظتك واضغط "اتشحن" والبوت يبعت للاعب إشعار.
 
 زرار "ضاعف دخلك ×٢" بقى بيعرض إعلان هو كمان (مابيدّيش نقاط، ده إيراد صافي ليك). لحد ما تفعّل الإعلانات بيشتغل مجاناً.
 

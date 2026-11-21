@@ -39,7 +39,7 @@ async function api(
   store: Store,
   path: string,
   body: unknown = {},
-  opts: { id?: number; now?: number; auth?: string | null; live?: boolean } = {},
+  opts: { id?: number; now?: number; auth?: string | null; live?: boolean; verified?: boolean; admins?: number[] } = {},
 ) {
   const now = opts.now ?? NOW;
   const auth = opts.auth === undefined ? 'tma ' + (await initData(opts.id ?? 42, Math.floor(now / 1000))) : opts.auth;
@@ -47,7 +47,7 @@ async function api(
   if (auth) headers.authorization = auth;
   const res = await handleApi(
     new Request('https://x.test' + path, { method: 'POST', headers, body: JSON.stringify(body) }),
-    { store, botToken: TOKEN, now, data: gameData, ads: { live: opts.live ?? false, zone: '123' }, newId: () => 'T' + now },
+    { store, botToken: TOKEN, now, data: gameData, ads: { live: opts.live ?? false, zone: '123', verified: opts.verified ?? false }, newId: () => 'T' + now, admin: { ids: opts.admins ?? [], notify: async () => {} } },
   );
   return { status: res.status, json: (await res.json()) as any };
 }
@@ -478,4 +478,67 @@ test('D1Store: withdrawals, phone check, one-time resolve, stats (real SQL)', as
   assert.equal(await store.resolveWithdrawal(id, 'rejected', NOW + 2, ''), false, 'cannot resolve twice');
   assert.equal(await store.phoneTakenByOther('01012345678', 2), true, 'paid still blocks other accounts');
   assert.equal((await store.stats()).paidPoints, 6000);
+});
+
+test('postback: only a valued, authentic, first-time impression credits points', async () => {
+  const { handlePostback } = await import('../src/worker/postback.ts');
+  const store = new MemoryStore();
+  await api(store, '/api/sync');
+  const pb = async (q: Record<string, string>, over: { live?: boolean; secret?: string } = {}) => {
+    const url = new URL('https://x.test/postback');
+    for (const [k, v] of Object.entries({ secret: 'S3CRET', event_type: 'impression', reward_event_type: 'valued', estimated_price: '0.0030000', ...q })) url.searchParams.set(k, v);
+    const r = await handlePostback(new Request(url), { store, now: NOW, secret: over.secret ?? 'S3CRET', live: over.live ?? true });
+    return { status: r.status, body: await r.text() };
+  };
+  const pts = () => store.rows.get(42)!.state.walletPoints;
+
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH1', secret: 'wrong' })).status, 403);
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH1' }, { secret: '' })).status, 403);
+  assert.equal((await pb({ ymid: 'garbage' })).body, 'ignored');
+  assert.equal(pts(), 0);
+
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH1', telegram_id: '42' })).body, 'ok');
+  assert.equal(pts(), 6);
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH1', telegram_id: '42' })).body, 'duplicate', 'Monetag retries must not pay twice');
+  assert.equal(pts(), 6);
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH2', telegram_id: '99' })).body, 'ignored', 'telegram_id must match the ymid user');
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH3', reward_event_type: 'non_valued', estimated_price: '0' })).body, 'ok');
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH4', event_type: 'click' })).body, 'ok');
+  assert.equal(pts(), 6, 'unpaid impressions and clicks give no points');
+  assert.equal((await pb({ ymid: 'b_42_ABCDEFGH5' })).body, 'ok');
+  assert.equal(pts(), 6, 'boost ads give no points');
+  assert.equal((await pb({ ymid: 'p_42_ABCDEFGH6' }, { live: false })).body, 'ok');
+  assert.equal(pts(), 6, 'nothing is paid while ads are not live');
+
+  const st = await store.stats();
+  assert.equal(st.adEvents, 5);
+  assert.ok(Math.abs(st.revenueUsd - 0.012) < 1e-9, 'revenue is recorded for paid events');
+
+  for (let i = 0; i < 25; i++) await pb({ ymid: 'p_42_CAPTEST' + String(i).padStart(2, '0') });
+  assert.equal(pts(), 6 * 20, 'daily cap of 20 point ads');
+});
+
+test('verified mode: the client can no longer claim points itself', async () => {
+  const store = new MemoryStore();
+  const st = await api(store, '/api/ad/start', { kind: 'points' }, { live: true, verified: true });
+  assert.equal(st.json.ok, true);
+  const r = await api(store, '/api/ad/claim', { ticket: st.json.ticket }, { now: NOW + 20_000, live: true, verified: true });
+  assert.equal(r.json.ok, false);
+  assert.equal(store.rows.get(42)!.state.walletPoints, 0);
+});
+
+test('in-app admin: only listed ids, overview and resolve work', async () => {
+  const store = new MemoryStore();
+  await api(store, '/api/sync');
+  store.rows.get(42)!.state.walletPoints = 6000;
+  await api(store, '/api/withdraw', { phone: '01012345678' });
+  assert.equal((await api(store, '/api/admin/overview', {}, { admins: [1] })).status, 403);
+  const sync = await api(store, '/api/sync', {}, { admins: [42] });
+  assert.equal(sync.json.view.isAdmin, true);
+  assert.equal((await api(store, '/api/sync', {}, { admins: [] })).json.view.isAdmin, false);
+  const ov = await api(store, '/api/admin/overview', {}, { admins: [42] });
+  assert.equal(ov.json.pending.length, 1);
+  const ok = await api(store, '/api/admin/resolve', { id: 1, action: 'paid' }, { admins: [42], now: NOW + 49 * 3600_000 });
+  assert.equal(ok.json.ok, true);
+  assert.equal(store.wds[0].status, 'paid');
 });
