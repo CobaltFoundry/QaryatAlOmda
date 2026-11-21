@@ -313,8 +313,8 @@ test('api: a lost optimistic-lock race is retried, not dropped', async () => {
   const racy: Store = {
     get: (id) => mem.get(id),
     create: (...a) => mem.create(a[0], a[1], a[2], a[3]),
-    top: (n) => mem.top(n),
-    rank: (l) => mem.rank(l),
+    top: (n, h) => mem.top(n, h),
+    rank: (l, h) => mem.rank(l, h),
     async save(row) {
       if (!injected) {
         injected = true;
@@ -541,4 +541,39 @@ test('in-app admin: only listed ids, overview and resolve work', async () => {
   const ok = await api(store, '/api/admin/resolve', { id: 1, action: 'paid' }, { admins: [42], now: NOW + 49 * 3600_000 });
   assert.equal(ok.json.ok, true);
   assert.equal(store.wds[0].status, 'paid');
+});
+
+test('leaderboard: the owner is hidden from the list and everyone else ranks without them', async () => {
+  const store = new MemoryStore();
+  await api(store, '/api/sync', {}, { id: 1 });
+  await api(store, '/api/sync', {}, { id: 2 });
+  store.rows.get(1)!.state.lifetimeEarned = 1e12; // the owner, far ahead
+  store.rows.get(2)!.state.lifetimeEarned = 500;
+  const asPlayer = await api(store, '/api/leaderboard', {}, { id: 2, admins: [1] });
+  assert.equal(asPlayer.json.top.length, 1);
+  assert.equal(asPlayer.json.me.rank, 1);
+  const asOwner = await api(store, '/api/leaderboard', {}, { id: 1, admins: [1] });
+  assert.equal(asOwner.json.me.rank, 1, 'the owner can see where they would stand');
+  assert.equal(asOwner.json.me.hidden, true);
+  assert.equal(asOwner.json.top.length, 1);
+  assert.equal(asOwner.json.top[0].lifetime, 500);
+  const noAdmin = await api(store, '/api/leaderboard', {}, { id: 2 });
+  assert.equal(noAdmin.json.me.rank, 2, 'without an admin list nothing is hidden');
+});
+
+test('admin reset-me: owner only, restarts the game but keeps the wallet', async () => {
+  const store = new MemoryStore();
+  await api(store, '/api/sync');
+  const st = store.rows.get(42)!.state;
+  Object.assign(st, { cash: 5e9, stars: 900, lifetimeStars: 900, prestigeLevel: 5, walletPoints: 1234, lastWithdrawAt: 7 });
+  assert.equal((await api(store, '/api/admin/reset-me', {}, { admins: [1] })).status, 403);
+  assert.equal(store.rows.get(42)!.state.prestigeLevel, 5, 'untouched for non-owners');
+  const r = await api(store, '/api/admin/reset-me', {}, { admins: [42] });
+  assert.equal(r.json.ok, true);
+  const after = store.rows.get(42)!.state;
+  assert.equal(after.prestigeLevel, 0);
+  assert.equal(after.stars, 0);
+  assert.equal(after.lifetimeStars, 0);
+  assert.equal(after.walletPoints, 1234);
+  assert.equal(after.lastWithdrawAt, 7);
 });

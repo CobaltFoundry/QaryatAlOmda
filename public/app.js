@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.7';
+const APP_VERSION = '0.7.2';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -356,13 +356,13 @@ async function renderRank() {
       h('div', { class: 'txt' }, h('b', { text: t.name }), h('small', { text: 'إجمالي ' + fmt(t.lifetime) + ' جنيه' })),
     ),
   );
-  if (r.me && r.me.rank > r.top.length) {
+  if (r.me && (r.me.hidden || r.me.rank > r.top.length)) {
     rows.push(
       h(
         'div',
         { class: 'row rank me' },
         h('span', { class: 'pos', text: ar(r.me.rank) }),
-        h('div', { class: 'txt' }, h('b', { text: r.me.name }), h('small', { text: 'إجمالي ' + fmt(r.me.lifetime) + ' جنيه' })),
+        h('div', { class: 'txt' }, h('b', { text: r.me.name }), h('small', { text: (r.me.hidden ? 'مخفي عن الباقي · ' : '') + 'إجمالي ' + fmt(r.me.lifetime) + ' جنيه' })),
       ),
     );
   }
@@ -595,6 +595,19 @@ function renderAdmin() {
     h('div', { class: 'list' }, pending.length ? pending : [h('small', { text: 'مفيش طلبات' })]),
     h('h3', { class: 'section-title', text: 'آخر اللي اتعالج' }),
     h('div', { class: 'list' }, recent.length ? recent : [h('small', { text: 'لسه مفيش' })]),
+    h('h3', { class: 'section-title', text: 'اختبار' }),
+    h('button', {
+      class: 'btn off big',
+      text: 'ابدأ اللعبة من الأول (حسابي بس)',
+      onclick: async () => {
+        if (!(await confirmAsk('هتبدأ اللعبة من الصفر (الفلوس والنجوم والبركات). المحفظة والإعلانات مش هتتأثر. متأكد؟'))) return;
+        const r = await act('/api/admin/reset-me');
+        if (r) {
+          toast('اتعمل إعادة ضبط');
+          goTo('home');
+        }
+      },
+    }),
   );
 }
 

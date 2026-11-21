@@ -244,13 +244,34 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       return json(await adminResolve({ store: deps.store, now, notify: deps.admin.notify }, body));
     }
 
+    case '/api/admin/reset-me': {
+      // Owner-only: restart the game for testing. Wallet, ad counters and withdrawal timing are kept.
+      if (!deps.admin?.ids.includes(user.id)) return json({ ok: false, error: 'forbidden' }, 403);
+      return mutate(deps, user, (s) => ({
+        ok: true,
+        state: {
+          ...newState(now),
+          walletPoints: s.walletPoints,
+          lifetimePoints: s.lifetimePoints,
+          lifetimeAds: s.lifetimeAds,
+          adDay: s.adDay,
+          adCount: s.adCount,
+          lastAdAt: s.lastAdAt,
+          lastWithdrawAt: s.lastWithdrawAt,
+        },
+      }));
+    }
+
     case '/api/leaderboard': {
-      const [top, row] = await Promise.all([deps.store.top(20), deps.store.get(user.id)]);
+      // The owner plays outside the ranking: hidden from everyone's list, but can still see where they would stand.
+      const hide = deps.admin?.ids ?? [];
+      const [top, row] = await Promise.all([deps.store.top(20, hide), deps.store.get(user.id)]);
       const mine = row ? row.state.lifetimeEarned : 0;
+      const isOwner = hide.includes(user.id);
       return json({
         ok: true,
         top,
-        me: row ? { name: row.name, lifetime: mine, rank: await deps.store.rank(mine) } : null,
+        me: row ? { name: row.name, lifetime: mine, rank: await deps.store.rank(mine, hide), hidden: isOwner } : null,
       });
     }
 

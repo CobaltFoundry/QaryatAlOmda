@@ -57,9 +57,10 @@ export interface Store {
   create(userId: number, name: string, state: GameState, referrer: number | null, now: number): Promise<boolean>;
   /** Returns false if someone else saved first (version mismatch). */
   save(row: PlayerRow, now: number): Promise<boolean>;
-  top(limit: number): Promise<{ name: string; lifetime: number }[]>;
+  /** Leaderboard; `hide` are player ids that must not appear (the owner). */
+  top(limit: number, hide?: number[]): Promise<{ name: string; lifetime: number }[]>;
   /** 1-based rank of a player with this lifetime total. */
-  rank(lifetime: number): Promise<number>;
+  rank(lifetime: number, hide?: number[]): Promise<number>;
   addWithdrawal(w: Omit<Withdrawal, 'id' | 'status' | 'resolvedAt' | 'note'>): Promise<number>;
   getWithdrawal(id: number): Promise<Withdrawal | null>;
   /** Moves a pending request to paid/rejected. False if it was not pending (so it can't be resolved twice). */
@@ -178,16 +179,21 @@ export class D1Store implements Store {
     return (r.meta?.changes ?? 0) === 1;
   }
 
-  async top(limit: number): Promise<{ name: string; lifetime: number }[]> {
+  async top(limit: number, hide: number[] = []): Promise<{ name: string; lifetime: number }[]> {
+    const marks = hide.map(() => '?').join(',');
     const r = await this.db
-      .prepare('SELECT name, lifetime FROM players ORDER BY lifetime DESC LIMIT ?')
-      .bind(limit)
+      .prepare(`SELECT name, lifetime FROM players ${hide.length ? `WHERE user_id NOT IN (${marks})` : ''} ORDER BY lifetime DESC LIMIT ?`)
+      .bind(...hide, limit)
       .all<{ name: string; lifetime: number }>();
     return r.results.map((x) => ({ name: x.name, lifetime: x.lifetime }));
   }
 
-  async rank(lifetime: number): Promise<number> {
-    const r = await this.db.prepare('SELECT COUNT(*) AS c FROM players WHERE lifetime > ?').bind(lifetime).first<{ c: number }>();
+  async rank(lifetime: number, hide: number[] = []): Promise<number> {
+    const marks = hide.map(() => '?').join(',');
+    const r = await this.db
+      .prepare(`SELECT COUNT(*) AS c FROM players WHERE lifetime > ? ${hide.length ? `AND user_id NOT IN (${marks})` : ''}`)
+      .bind(lifetime, ...hide)
+      .first<{ c: number }>();
     return (r?.c ?? 0) + 1;
   }
 
@@ -284,14 +290,16 @@ export class MemoryStore implements Store {
     this.rows.set(row.userId, structuredClone({ ...row, version: row.version + 1 }));
     return true;
   }
-  async top(limit: number) {
-    return [...this.rows.values()]
+  async top(limit: number, hide: number[] = []) {
+    return [...this.rows.entries()]
+      .filter(([id]) => !hide.includes(id))
+      .map(([, r]) => r)
       .map((r) => ({ name: r.name, lifetime: r.state.lifetimeEarned }))
       .sort((a, b) => b.lifetime - a.lifetime)
       .slice(0, limit);
   }
-  async rank(lifetime: number) {
-    return [...this.rows.values()].filter((r) => r.state.lifetimeEarned > lifetime).length + 1;
+  async rank(lifetime: number, hide: number[] = []) {
+    return [...this.rows.entries()].filter(([id, r]) => !hide.includes(id) && r.state.lifetimeEarned > lifetime).length + 1;
   }
 
   wds: Withdrawal[] = [];
