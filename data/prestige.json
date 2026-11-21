@@ -4,7 +4,7 @@
   "name": "بركة الأبناء",
   "description": "كل مستوى يزود الدخل 25% للأبد، الولاد طالعين شاطرين.",
   "starCost": 1,
-  "starCostGrowth": 1.5,
+  "starCostGrowth": 3,
   "type": "income_mult",
   "valuePerLevel": 0.25,
   "maxLevel": 10
@@ -14,7 +14,7 @@
   "name": "الميراث",
   "description": "كل مستوى يزود الدخل 50% للأبد، والعمة سابت وصية مفيدة.",
   "starCost": 3,
-  "starCostGrowth": 1.5,
+  "starCostGrowth": 3,
   "type": "income_mult",
   "valuePerLevel": 0.5,
   "maxLevel": 5
@@ -24,7 +24,7 @@
   "name": "الجدّ المؤسس",
   "description": "كل مستوى يضاعف الدخل للأبد، الجد كان بيعرف يشتغل.",
   "starCost": 10,
-  "starCostGrowth": 1.5,
+  "starCostGrowth": 3,
   "type": "income_mult",
   "valuePerLevel": 1,
   "maxLevel": 3
@@ -34,7 +34,7 @@
   "name": "إيد الحداد",
   "description": "كل مستوى يزود قوة الضغطة 50%، الإيد اتوارثت.",
   "starCost": 2,
-  "starCostGrowth": 1.5,
+  "starCostGrowth": 2.0,
   "type": "tap_mult",
   "valuePerLevel": 0.5,
   "maxLevel": 5
@@ -44,7 +44,7 @@
   "name": "ضغطة الجدّ",
   "description": "كل مستوى يضاعف قوة الضغطة، الجد كان إيده تقيلة.",
   "starCost": 5,
-  "starCostGrowth": 1.5,
+  "starCostGrowth": 2.0,
   "type": "tap_mult",
   "valuePerLevel": 1,
   "maxLevel": 3
@@ -54,7 +54,7 @@
   "name": "نوم العمدة الكبير",
   "description": "كل مستوى يزود ساعتين لشغل الغياب، نام يا عمدة.",
   "starCost": 2,
-  "starCostGrowth": 1.6,
+  "starCostGrowth": 2.0,
   "type": "offline_hours",
   "valuePerLevel": 2,
   "maxLevel": 6
@@ -64,7 +64,7 @@
   "name": "قهوة الصبح",
   "description": "كل مستوى يزود ساعتين للغياب، القهوة بتمشي الشغل.",
   "starCost": 6,
-  "starCostGrowth": 1.6,
+  "starCostGrowth": 2.0,
   "type": "offline_hours",
   "valuePerLevel": 2,
   "maxLevel": 3
@@ -74,7 +74,7 @@
   "name": "كنز تحت البلاطة",
   "description": "كل مستوى يديك 5000 جنيه بداية، الجد كان بيخبي.",
   "starCost": 1,
-  "starCostGrowth": 1.4,
+  "starCostGrowth": 2.0,
   "type": "start_cash",
   "valuePerLevel": 5000,
   "maxLevel": 10
@@ -84,19 +84,19 @@
   "name": "دفتر الجدة",
   "description": "كل مستوى يديك مليون جنيه بداية، الجدة كانت بتحوش.",
   "starCost": 4,
-  "starCostGrowth": 1.4,
+  "starCostGrowth": 2.0,
   "type": "start_cash",
   "valuePerLevel": 1000000,
-  "maxLevel": 10
+  "maxLevel": 8
  },
  {
   "id": "p_safe",
   "name": "خزنة العيلة",
-  "description": "كل مستوى يديك مليار جنيه بداية، محدش عارف الرقم السري.",
+  "description": "كل مستوى يديك ١٠٠ مليون جنيه بداية، محدش عارف الرقم السري.",
   "starCost": 12,
-  "starCostGrowth": 1.4,
+  "starCostGrowth": 2.0,
   "type": "start_cash",
-  "valuePerLevel": 1000000000,
+  "valuePerLevel": 100000000.0,
   "maxLevel": 5
  }
 ]

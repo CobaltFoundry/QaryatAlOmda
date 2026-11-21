@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.4';
+const APP_VERSION = '0.6';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -154,6 +154,15 @@ const ERRORS = {
   max_level: () => 'وصلت للآخر',
   not_ready: () => 'لسه مش وقته يا عمدة',
   busy: () => 'الدنيا زحمة، جرب تاني',
+  ads_off: () => 'الإعلانات لسه ما اتفعلتش، قريب إن شاء الله',
+  cooldown: () => 'استنى شوية بين كل إعلان والتاني',
+  bad_ticket: () => 'الإعلان ماتحسبش، جرب تاني',
+  too_early: () => 'لازم تكمل الإعلان للآخر',
+  expired: () => 'الإعلان خلص وقته، جرب تاني',
+  below_minimum: () => 'الرصيد لسه أقل من الحد الأدنى',
+  too_soon: () => 'تقدر تسحب مرة كل أسبوع',
+  bad_phone: () => 'اكتب رقم موبايل مصري صح (01XXXXXXXXX)',
+  phone_taken: () => 'الرقم ده مستخدم مع حساب تاني',
 };
 
 async function act(path, body) {
@@ -364,6 +373,7 @@ function renderTab() {
   if (tab === 'shop') renderShop();
   else if (tab === 'upgrades') renderUpgrades();
   else if (tab === 'prestige') renderPrestige();
+  else if (tab === 'wallet') renderWallet();
 }
 
 function refreshAffordable() {
@@ -414,17 +424,127 @@ async function doPrestige() {
   }
 }
 
-/** Placeholder for the rewarded ad (Monetag / Adsgram). Must resolve true only if the ad was completed. */
+// ---- Rewarded ads (Monetag rewarded interstitial) -----------------------------
+let sdkZone = '';
+function loadAdSdk(zone) {
+  return new Promise((resolve) => {
+    const fn = 'show_' + zone;
+    if (typeof window[fn] === 'function') return resolve(window[fn]);
+    if (sdkZone !== zone) {
+      sdkZone = zone;
+      const sc = document.createElement('script');
+      sc.src = '//libtl.com/sdk.js';
+      sc.dataset.zone = zone;
+      sc.dataset.sdk = fn;
+      document.head.append(sc);
+    }
+    let tries = 0;
+    const t = setInterval(() => {
+      if (typeof window[fn] === 'function') (clearInterval(t), resolve(window[fn]));
+      else if (++tries > 40) (clearInterval(t), resolve(null));
+    }, 250);
+  });
+}
+
+/** Shows an ad. Resolves true only if the network says it was completed. With no ad zone there is nothing to show. */
 async function showRewardedAd() {
-  return true;
+  const zone = V?.wallet?.adZone;
+  if (!zone) return true;
+  const show = await loadAdSdk(zone);
+  if (!show) return false;
+  try {
+    await show({ ymid: String(tg?.initDataUnsafe?.user?.id ?? '') });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let adBusy = false;
+/** start ticket -> show ad -> claim. Returns the claim response or null. */
+async function watchAd(kind) {
+  if (adBusy) return null;
+  adBusy = true;
+  try {
+    const st = await act('/api/ad/start', { kind });
+    if (!st) return null;
+    if (!(await showRewardedAd())) {
+      toast('الإعلان ماكملش، جرب تاني');
+      return null;
+    }
+    return await act('/api/ad/claim', { ticket: st.ticket });
+  } finally {
+    adBusy = false;
+  }
 }
 
 async function claimBoost() {
-  if (!(await showRewardedAd())) return;
-  const r = await act('/api/boost');
+  const r = await watchAd('boost');
   if (r) {
     haptic('success');
-    toast(say('boost_on', { minutes: ar(r.minutes) }));
+    toast(say('boost_on', { minutes: ar(30) }));
+  }
+}
+
+let wdHistory = [];
+const STATUS_AR = { pending: 'قيد المراجعة', paid: 'اتشحن', rejected: 'مرفوض' };
+
+function renderWallet() {
+  const w = V.wallet;
+  const egp = w.points / w.pointsPerEgp;
+  $('#walletPts').textContent = ar(Math.floor(w.points)) + ' نقطة';
+  $('#walletEgp').textContent = '= ' + ar(egp.toFixed(2)) + ' جنيه';
+  $('#walletBar').style.width = Math.min(100, (w.points / w.minPoints) * 100) + '%';
+  $('#walletHint').textContent =
+    w.points >= w.minPoints
+      ? 'تقدر تسحب دلوقتي'
+      : 'الحد الأدنى للسحب ' + ar(w.minPoints / w.pointsPerEgp) + ' جنيه، باقي ' + ar(w.minPoints - w.points) + ' نقطة';
+  const btn = $('#adBtn');
+  btn.disabled = !w.adLive || w.adsLeft <= 0;
+  $('#adSub').textContent = !w.adLive
+    ? 'الإعلانات لسه ما اتفعلتش'
+    : w.adsLeft > 0
+      ? 'كل إعلان ' + ar(w.adReward) + ' نقاط، متبقي ' + ar(w.adsLeft) + ' النهاردة'
+      : 'خلصت إعلانات النهاردة، تعال بكرة';
+  const nextOk = w.nextWithdrawAt && serverNow() < w.nextWithdrawAt;
+  $('#withdrawBtn').disabled = w.points < w.minPoints || !!nextOk;
+  $('#withdrawNote').textContent = nextOk
+    ? 'تقدر تسحب تاني بعد ' + ar(Math.ceil((w.nextWithdrawAt - serverNow()) / 86_400_000)) + ' يوم'
+    : 'الشحن بيتم يدوي خلال يومين تقريباً، هيجيلك إشعار من البوت أول ما يتم';
+  $('#wdList').replaceChildren(
+    ...wdHistory.map((x) =>
+      h(
+        'div',
+        { class: 'row' },
+        h(
+          'div',
+          { class: 'txt' },
+          h('b', { text: ar((x.points / w.pointsPerEgp).toFixed(2)) + ' جنيه' }),
+          h('small', { text: ar(x.phone) }),
+        ),
+        h('span', { class: 'badge ' + x.status, text: STATUS_AR[x.status] || x.status }),
+      ),
+    ),
+  );
+}
+
+async function loadWallet() {
+  const r = await act('/api/wallet');
+  if (r) {
+    wdHistory = r.withdrawals || [];
+    renderWallet();
+  }
+}
+
+async function doWithdraw() {
+  const phone = $('#phone').value.trim();
+  if (!phone) return toast(ERRORS.bad_phone());
+  if (!(await confirmAsk('هنشحن الرقم ' + ar(phone) + ' بكل رصيدك. متأكد إن الرقم صح؟'))) return;
+  const r = await act('/api/withdraw', { phone });
+  if (r) {
+    haptic('success');
+    toast('اتسجل الطلب، هنشحنلك قريب');
+    await loadWallet();
   }
 }
 
@@ -557,6 +677,7 @@ function goTo(next) {
   $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.go === next));
   $('main').scrollTop = 0;
   if (next === 'rank') renderRank();
+  else if (next === 'wallet') loadWallet();
   else renderTab();
 }
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => goTo(b.dataset.go)));
@@ -568,6 +689,14 @@ $$('#qty button').forEach((b) =>
 );
 $('#prestigeBtn').addEventListener('click', doPrestige);
 $('#boostBtn').addEventListener('click', claimBoost);
+$('#adBtn').addEventListener('click', async () => {
+  const r = await watchAd('points');
+  if (r) {
+    haptic('success');
+    toast('+' + ar(r.points) + ' نقطة في محفظتك');
+  }
+});
+$('#withdrawBtn').addEventListener('click', doWithdraw);
 $('#inviteBtn').addEventListener('click', invite);
 $('#offlineOk').addEventListener('click', () => ($('#offline').hidden = true));
 

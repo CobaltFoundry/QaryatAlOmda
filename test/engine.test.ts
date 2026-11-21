@@ -98,9 +98,9 @@ test('income: linear in level, per-asset and global upgrades stack', () => {
   assert.equal(incomePerSecond({ ...base, upgrades: ['u_a1', 'u_glob'] }, data, T0), 9);
 });
 
-test('income: lifetime stars give +10% each, prestige upgrades multiply', () => {
-  const s = st({ assetLevels: { '1': 10 }, lifetimeStars: 10 });
-  assert.ok(Math.abs(incomePerSecond(s, data, T0) - 20) < 1e-9);
+test('income: lifetime stars give +50% x sqrt(stars), prestige upgrades multiply', () => {
+  const s = st({ assetLevels: { '1': 10 }, lifetimeStars: 16 });
+  assert.ok(Math.abs(incomePerSecond(s, data, T0) - 30) < 1e-9);
   const s2 = st({ assetLevels: { '1': 10 }, prestigeUpgrades: { p_inc: 2 } });
   assert.ok(Math.abs(incomePerSecond(s2, data, T0) - 22.5) < 1e-9);
 });
@@ -169,12 +169,14 @@ test('applyTaps is rate limited and ignores garbage input', () => {
 test('prestige: gate, star formula and reset', () => {
   assert.equal(prestigeStarsGain(st({ runEarned: 5e8 })), 0);
   assert.equal(prestigeStarsGain(st({ runEarned: 1e9 })), 1);
-  assert.equal(prestigeStarsGain(st({ runEarned: 4e9 })), 2);
+  assert.equal(prestigeStarsGain(st({ runEarned: 8e9 })), 2);
+  assert.equal(prestigeStarsGain(st({ runEarned: 1e9, prestigeLevel: 1 })), 0);
+  assert.equal(prestigeStarsGain(st({ runEarned: 2.5e9, prestigeLevel: 1 })), 1);
   assert.deepEqual(doPrestige(st({ runEarned: 5e8 }), data, T0), { ok: false, error: 'not_ready' });
 
   const before = st({
     cash: 777,
-    runEarned: 4e9,
+    runEarned: 8e9,
     assetLevels: { '1': 5 },
     upgrades: ['u_glob'],
     prestigeUpgrades: { p_inc: 1 },

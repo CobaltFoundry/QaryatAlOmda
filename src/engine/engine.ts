@@ -12,7 +12,8 @@ export const BASE_OFFLINE_HOURS = 2;
 export const MAX_TAPS_PER_SECOND = 15;
 export const TAP_BURST_ALLOWANCE = 10;
 export const PRESTIGE_MIN_EARNED = 1e9;
-export const STAR_BONUS_PER_STAR = 0.1;
+export const PRESTIGE_THRESHOLD_GROWTH = 2.5;
+export const STAR_BONUS_PER_STAR = 0.5; // applied to sqrt(lifetimeStars): diminishing returns
 export const BOOST_MULTIPLIER = 2;
 export const MAX_BUY_QTY = 1000;
 /** A tap batch is judged against at most this many seconds of elapsed time (no banking taps). */
@@ -39,6 +40,16 @@ export function newState(now: number): GameState {
     boostUntil: 0,
     boostDay: 0,
     boostClaims: 0,
+    walletPoints: 0,
+    lifetimePoints: 0,
+    lifetimeAds: 0,
+    adDay: 0,
+    adCount: 0,
+    lastAdAt: 0,
+    ticketId: '',
+    ticketKind: '',
+    ticketAt: 0,
+    lastWithdrawAt: 0,
   };
 }
 
@@ -82,7 +93,7 @@ export function isAssetUnlocked(state: GameState, asset: AssetDef): boolean {
 
 // ---- Income and taps --------------------------------------------------------
 export function incomeMultiplier(state: GameState, data: GameData): number {
-  let m = 1 + STAR_BONUS_PER_STAR * state.lifetimeStars;
+  let m = 1 + STAR_BONUS_PER_STAR * Math.sqrt(state.lifetimeStars);
   for (const u of ownedUpgrades(state, data)) {
     if (u.type === 'income_mult' && u.targetAssetId === 0) m *= u.value;
   }
@@ -271,9 +282,14 @@ export function buyUpgrade(state: GameState, data: GameData, upgradeId: string):
 }
 
 // ---- Prestige ("التوريث") ---------------------------------------------------
+/** Each inheritance raises the bar: the next run must earn more before it pays out. */
+export function prestigeMinEarned(state: GameState): number {
+  return PRESTIGE_MIN_EARNED * PRESTIGE_THRESHOLD_GROWTH ** state.prestigeLevel;
+}
 export function prestigeStarsGain(state: GameState): number {
-  if (state.runEarned < PRESTIGE_MIN_EARNED) return 0;
-  return Math.floor(Math.sqrt(state.runEarned / PRESTIGE_MIN_EARNED));
+  const min = prestigeMinEarned(state);
+  if (state.runEarned < min) return 0;
+  return Math.floor(Math.cbrt(state.runEarned / min));
 }
 
 export function prestigeUpgradeCost(def: PrestigeUpgradeDef, currentLevel: number): number {

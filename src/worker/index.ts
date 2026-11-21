@@ -1,3 +1,4 @@
+import { handleAdmin } from './admin.ts';
 import { handleApi } from './api.ts';
 import { handleUpdate, setupBot } from './bot.ts';
 import type { TgUpdate } from './bot.ts';
@@ -12,6 +13,10 @@ export interface Env {
   BOT_TOKEN: string;
   /** Secret: any random string of letters, digits, "_" or "-". */
   WEBHOOK_SECRET: string;
+  /** Secret, optional: set to 1 to pay points for ads (only after the ad network works). */
+  ADS_LIVE?: string;
+  /** Secret, optional: Monetag zone id for the rewarded ad. */
+  MONETAG_ZONE?: string;
 }
 
 let schemaReady: Promise<void> | null = null;
@@ -49,7 +54,25 @@ export default {
       if (!env.BOT_TOKEN) return text('BOT_TOKEN is not set', 500);
       const st = store(env);
       await schemaReady;
-      return handleApi(req, { store: st, botToken: env.BOT_TOKEN, now: Date.now(), data: gameData });
+      return handleApi(req, {
+        store: st,
+        botToken: env.BOT_TOKEN,
+        now: Date.now(),
+        data: gameData,
+        ads: { live: env.ADS_LIVE === '1' && !!env.MONETAG_ZONE, zone: (env.MONETAG_ZONE ?? '').replace(/[^0-9]/g, '') },
+      });
+    }
+
+    if (path.startsWith('/admin-api/')) {
+      const st = store(env);
+      await schemaReady;
+      const call = tgCall(env.BOT_TOKEN);
+      return handleAdmin(req, {
+        store: st,
+        now: Date.now(),
+        secret: env.WEBHOOK_SECRET ?? '',
+        notify: async (userId, text) => void (await call('sendMessage', { chat_id: userId, text })),
+      });
     }
 
     if (path === '/webhook' && req.method === 'POST') {

@@ -17,12 +17,18 @@ import type { Store } from './store.ts';
 import { validateInitData } from './telegram.ts';
 import type { TgUser } from './telegram.ts';
 import { buildView } from './view.ts';
+import type { AdsConfig } from './view.ts';
+import { claimAd, normalizePhone, requestWithdraw, startAd } from '../engine/wallet.ts';
+import type { AdKind } from '../engine/wallet.ts';
 
 export interface ApiDeps {
   store: Store;
   botToken: string;
   now: number;
   data: GameData;
+  ads?: AdsConfig;
+  /** Ticket id generator; tests can pin it. */
+  newId?: () => string;
 }
 
 type Body = Record<string, unknown>;
@@ -48,7 +54,12 @@ function unlockedIds(state: GameState, data: GameData): Set<number> {
   return new Set(data.assets.filter((a) => isAssetUnlocked(state, a)).map((a) => a.id));
 }
 
-async function mutate(deps: ApiDeps, user: TgUser, fn: Mutation): Promise<Response> {
+async function mutate(
+  deps: ApiDeps,
+  user: TgUser,
+  fn: Mutation,
+  after?: (extra: Record<string, unknown> | undefined) => Promise<Record<string, unknown> | void>,
+): Promise<Response> {
   const { store, data, now } = deps;
   const name = displayName(user);
 
@@ -62,14 +73,15 @@ async function mutate(deps: ApiDeps, user: TgUser, fn: Mutation): Promise<Respon
 
     const acc = accrue(row.state, data, now);
     const out = fn(acc.state, acc);
-    if (!out.ok) return json({ ok: false, error: out.error, view: buildView(acc.state, data, now) });
+    if (!out.ok) return json({ ok: false, error: out.error, view: buildView(acc.state, data, now, deps.ads) });
 
     const saved = await store.save({ ...row, name, state: out.state }, now);
     if (!saved) continue; // someone else wrote first: reload and retry
 
     const before = unlockedIds(acc.state, data);
     const newly = data.assets.filter((a) => isAssetUnlocked(out.state, a) && !before.has(a.id)).map((a) => a.name);
-    return json({ ok: true, view: buildView(out.state, data, now), newlyUnlocked: newly, ...out.extra });
+    const more = after ? await after(out.extra) : undefined;
+    return json({ ok: true, view: buildView(out.state, data, now, deps.ads), newlyUnlocked: newly, ...out.extra, ...more });
   }
   return json({ ok: false, error: 'busy' }, 409);
 }
@@ -165,11 +177,54 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       });
     }
 
-    case '/api/boost':
+    case '/api/ad/start': {
+      const kind = body.kind === 'points' || body.kind === 'boost' ? (body.kind as AdKind) : null;
+      if (!kind) return bad();
+      const id = (deps.newId ?? (() => crypto.randomUUID()))();
       return mutate(deps, user, (s) => {
-        const r = claimBoost(s, now);
-        return r.ok ? { ok: true, state: r.state, extra: { minutes: 30 } } : r;
+        const r = startAd(s, kind, now, id, deps.ads?.live ?? false);
+        return r.ok ? { ok: true, state: r.state, extra: { ticket: r.ticket } } : r;
       });
+    }
+
+    case '/api/ad/claim': {
+      if (typeof body.ticket !== 'string') return bad();
+      const ticket = body.ticket;
+      return mutate(deps, user, (s) => {
+        const r = claimAd(s, ticket, now, deps.ads?.live ?? false);
+        return r.ok ? { ok: true, state: r.state, extra: { kind: r.kind, points: r.points } } : r;
+      });
+    }
+
+    case '/api/wallet': {
+      const list = await deps.store.userWithdrawals(user.id, 10);
+      return mutate(deps, user, (s) => ({ ok: true, state: s, extra: { withdrawals: list } }));
+    }
+
+    case '/api/withdraw': {
+      if (typeof body.phone !== 'string') return bad();
+      const phone = normalizePhone(body.phone);
+      if (!phone) return json({ ok: false, error: 'bad_phone' });
+      if (await deps.store.phoneTakenByOther(phone, user.id)) return json({ ok: false, error: 'phone_taken' });
+      return mutate(
+        deps,
+        user,
+        (s) => {
+          const r = requestWithdraw(s, now);
+          return r.ok ? { ok: true, state: r.state, extra: { points: r.points } } : r;
+        },
+        async (extra) => {
+          const id = await deps.store.addWithdrawal({
+            userId: user.id,
+            name: displayName(user),
+            phone,
+            points: extra!.points as number,
+            createdAt: now,
+          });
+          return { withdrawalId: id };
+        },
+      );
+    }
 
     case '/api/leaderboard': {
       const [top, row] = await Promise.all([deps.store.top(20), deps.store.get(user.id)]);

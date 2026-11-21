@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>إدارة العمدة</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f2a2b; color: #f6ebd3; margin: 0; padding: 16px; max-width: 560px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  h2 { font-size: 16px; margin: 22px 0 8px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card { background: #173d3e; border-radius: 14px; padding: 12px; }
+  .card small { color: #b8c9c4; display: block; }
+  .card b { font-size: 20px; color: #e8b23a; }
+  .row { background: #173d3e; border-radius: 14px; padding: 12px; margin-bottom: 8px; line-height: 1.8; }
+  .phone { font-size: 22px; font-weight: 700; letter-spacing: 1px; direction: ltr; display: inline-block; color: #e8b23a; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 10px 14px; margin-inline-end: 8px; margin-top: 6px; cursor: pointer; font-weight: 700; }
+  .ok { background: #7ed6a4; color: #0f2a2b; } .no { background: #b3261e; color: #f6ebd3; } .cp { background: #264b4c; color: #f6ebd3; }
+  button:disabled { opacity: .5; }
+  .muted { color: #b8c9c4; font-size: 13px; }
+  #msg { position: fixed; bottom: 16px; inset-inline: 16px; background: #f6ebd3; color: #0f2a2b; padding: 10px; border-radius: 10px; display: none; text-align: center; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>إدارة العمدة</h1>
+<div id="root">جاري التحميل...</div>
+<div id="msg"></div>
+<script>
+const key = new URLSearchParams(location.search).get('key') || '';
+const root = document.getElementById('root');
+const msg = (t) => { const m = document.getElementById('msg'); m.textContent = t; m.style.display = 'block'; setTimeout(() => (m.style.display = 'none'), 2500); };
+async function api(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'x-admin-key': key, 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
+  return r.json();
+}
+const el = (tag, props = {}, ...kids) => { const e = document.createElement(tag); Object.assign(e, props); e.append(...kids.flat().filter((k) => k != null)); return e; };
+const egp = (p, per) => (p / per).toFixed(2);
+const ago = (ms) => { const h = Math.floor(ms / 3600000); return h < 1 ? 'من أقل من ساعة' : h < 48 ? 'من ' + h + ' ساعة' : 'من ' + Math.floor(h / 24) + ' يوم'; };
+
+async function load() {
+  const d = await api('/admin-api/overview');
+  if (!d.ok) { root.textContent = 'المفتاح غلط. افتح الصفحة بالشكل ده: /admin?key=<WEBHOOK_SECRET>'; return; }
+  const s = d.stats;
+  const stat = (label, value) => el('div', { className: 'card' }, el('small', { textContent: label }), el('b', { textContent: value }));
+  const rows = d.pending.map((w) => {
+    const age = d.now - w.createdAt;
+    const hold = age < d.holdMs;
+    const row = el('div', { className: 'row' });
+    row.append(
+      el('div', { textContent: w.name + '  ·  ' + ago(age) }),
+      el('div', { className: 'phone', textContent: w.phone }),
+      el('div', { textContent: egp(w.points, d.pointsPerEgp) + ' جنيه' }),
+      hold ? el('div', { className: 'muted', textContent: 'مقفول للمراجعة لحد ما يعدي ٤٨ ساعة' }) : null,
+    );
+    const cp = el('button', { className: 'cp', textContent: 'انسخ الرقم', onclick: () => { navigator.clipboard?.writeText(w.phone); msg('اتنسخ'); } });
+    const paid = el('button', { className: 'ok', textContent: 'اتشحن ✅', disabled: hold, onclick: async () => {
+      if (!confirm('أكدت إنك شحنت ' + w.phone + ' بمبلغ ' + egp(w.points, d.pointsPerEgp) + ' جنيه؟')) return;
+      const r = await api('/admin-api/resolve', { id: w.id, action: 'paid' }); msg(r.ok ? 'تم' : r.error); load();
+    } });
+    const no = el('button', { className: 'no', textContent: 'ارفض ورجّع النقاط', onclick: async () => {
+      const note = prompt('سبب الرفض (هيوصل للاعب)') ; if (note === null) return;
+      const r = await api('/admin-api/resolve', { id: w.id, action: 'rejected', note }); msg(r.ok ? 'تم' : r.error); load();
+    } });
+    row.append(cp, paid, no);
+    return row;
+  });
+  const recent = d.recent.map((w) => el('div', { className: 'row muted', textContent: (w.status === 'paid' ? '✅ ' : '❌ ') + w.name + ' · ' + w.phone + ' · ' + egp(w.points, d.pointsPerEgp) + ' جنيه' + (w.note ? ' · ' + w.note : '') }));
+  root.replaceChildren(
+    el('div', { className: 'grid' },
+      stat('لاعبين', String(s.players)),
+      stat('إعلانات اتشافت', String(s.lifetimeAds)),
+      stat('اتدفع (جنيه)', s.paidEgp.toFixed(2)),
+      stat('علينا لسه (جنيه)', s.owedEgp.toFixed(2)),
+    ),
+    el('div', { className: 'muted', textContent: 'قارن "علينا لسه + اتدفع" بإيراد Monetag الحقيقي كل أسبوع. لازم الإيراد يكون أكبر.' }),
+    el('h2', { textContent: 'طلبات السحب (' + d.pending.length + ')' }),
+    rows.length ? rows : el('div', { className: 'muted', textContent: 'مفيش طلبات' }),
+    el('h2', { textContent: 'آخر اللي اتعالج' }),
+    recent.length ? recent : el('div', { className: 'muted', textContent: 'لسه مفيش' }),
+  );
+}
+load();
+</script>
+</body>
+</html>

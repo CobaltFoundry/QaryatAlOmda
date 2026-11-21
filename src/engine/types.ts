@@ -80,6 +80,19 @@ export interface GameState {
   /** UTC day number (ms / 86400000) of the last boost claim, and claims made that day. */
   boostDay: number;
   boostClaims: number;
+  /** Wallet, in points (1000 points = 1 EGP). */
+  walletPoints: number;
+  lifetimePoints: number;
+  lifetimeAds: number;
+  /** UTC day and count of point-paying ads watched that day. */
+  adDay: number;
+  adCount: number;
+  lastAdAt: number;
+  /** Outstanding ad ticket: the reward is only granted for the ticket the server issued. */
+  ticketId: string;
+  ticketKind: string;
+  ticketAt: number;
+  lastWithdrawAt: number;
 }
 
 export type ErrorCode =
@@ -92,6 +105,13 @@ export type ErrorCode =
   | 'max_level'
   | 'bad_quantity'
   | 'not_ready'
-  | 'limit';
+  | 'limit'
+  | 'ads_off'
+  | 'cooldown'
+  | 'bad_ticket'
+  | 'too_early'
+  | 'expired'
+  | 'below_minimum'
+  | 'too_soon';
 
 export type Result<T = object> = ({ ok: true; state: GameState } & T) | { ok: false; error: ErrorCode };

@@ -39,7 +39,7 @@ async function api(
   store: Store,
   path: string,
   body: unknown = {},
-  opts: { id?: number; now?: number; auth?: string | null } = {},
+  opts: { id?: number; now?: number; auth?: string | null; live?: boolean } = {},
 ) {
   const now = opts.now ?? NOW;
   const auth = opts.auth === undefined ? 'tma ' + (await initData(opts.id ?? 42, Math.floor(now / 1000))) : opts.auth;
@@ -47,7 +47,7 @@ async function api(
   if (auth) headers.authorization = auth;
   const res = await handleApi(
     new Request('https://x.test' + path, { method: 'POST', headers, body: JSON.stringify(body) }),
-    { store, botToken: TOKEN, now, data: gameData },
+    { store, botToken: TOKEN, now, data: gameData, ads: { live: opts.live ?? false, zone: '123' }, newId: () => 'T' + now },
   );
   return { status: res.status, json: (await res.json()) as any };
 }
@@ -166,7 +166,7 @@ test('api: prestige end to end', async () => {
   const store = new MemoryStore();
   await api(store, '/api/sync');
   const row = store.rows.get(42)!;
-  row.state.runEarned = 4e9;
+  row.state.runEarned = 8e9;
   row.state.cash = 123;
   row.state.assetLevels = { '1': 5 };
   row.state.lastSeen = NOW;
@@ -182,15 +182,115 @@ test('api: prestige end to end', async () => {
   assert.equal(r.json.view.stars, 2 - first.starCost);
 });
 
-test('api: boost claims respect the daily limit', async () => {
+/** Runs a full ad round: start, wait `wait` ms, claim. */
+async function watch(store: Store, kind: 'points' | 'boost', at: number, opts: { live?: boolean; wait?: number } = {}) {
+  const st = await api(store, '/api/ad/start', { kind }, { now: at, live: opts.live });
+  if (!st.json.ok) return st;
+  return api(store, '/api/ad/claim', { ticket: st.json.ticket }, { now: at + (opts.wait ?? 15_000), live: opts.live });
+}
+
+test('api: boost needs a watched ad and respects the daily limit', async () => {
   const store = new MemoryStore();
   let last: any;
-  for (let i = 0; i < 10; i++) last = await api(store, '/api/boost');
+  for (let i = 0; i < 10; i++) last = await watch(store, 'boost', NOW + i * 60_000);
   assert.equal(last.json.ok, true);
   assert.equal(last.json.view.boostClaimsLeft, 0);
-  const eleventh = await api(store, '/api/boost');
+  const eleventh = await api(store, '/api/ad/start', { kind: 'boost' }, { now: NOW + 11 * 60_000 });
   assert.equal(eleventh.json.error, 'limit');
-  assert.ok(eleventh.json.view.boostUntil > NOW);
+  assert.equal((await api(store, '/api/boost')).status, 404, 'the old free boost route is gone');
+});
+
+test('ads: tickets cannot be forged, replayed, rushed or expired', async () => {
+  const store = new MemoryStore();
+  assert.equal((await api(store, '/api/ad/claim', { ticket: 'nope' })).json.error, 'bad_ticket');
+  const st = await api(store, '/api/ad/start', { kind: 'boost' }, { live: true });
+  assert.equal((await api(store, '/api/ad/claim', { ticket: 'wrong' }, { now: NOW + 20_000, live: true })).json.error, 'bad_ticket');
+  assert.equal((await api(store, '/api/ad/claim', { ticket: st.json.ticket }, { now: NOW + 2_000, live: true })).json.error, 'too_early');
+  assert.equal((await api(store, '/api/ad/claim', { ticket: st.json.ticket }, { now: NOW + 11 * 60_000, live: true })).json.error, 'expired');
+  const ok = await watch(store, 'boost', NOW + 30 * 60_000);
+  assert.equal(ok.json.ok, true);
+  assert.equal((await api(store, '/api/ad/claim', { ticket: 'T' + (NOW + 30 * 60_000) }, { now: NOW + 30 * 60_000 + 20_000 })).json.error, 'bad_ticket', 'replay');
+});
+
+test('ads: points are paid only when ads are live, with cooldown and daily cap', async () => {
+  const off = new MemoryStore();
+  assert.equal((await watch(off, 'points', NOW, { live: false })).json.error, 'ads_off');
+
+  const store = new MemoryStore();
+  const first = await watch(store, 'points', NOW, { live: true });
+  assert.equal(first.json.ok, true);
+  assert.equal(first.json.points, 6);
+  assert.equal(first.json.view.wallet.points, 6);
+  // right after the claim: cooldown
+  const quick = await api(store, '/api/ad/start', { kind: 'points' }, { now: NOW + 16_000, live: true });
+  assert.equal(quick.json.error, 'cooldown');
+  let last: any;
+  for (let i = 1; i < 20; i++) last = await watch(store, 'points', NOW + i * 60_000, { live: true });
+  assert.equal(last.json.view.wallet.points, 120);
+  assert.equal(last.json.view.wallet.adsLeft, 0);
+  assert.equal((await api(store, '/api/ad/start', { kind: 'points' }, { now: NOW + 20 * 60_000, live: true })).json.error, 'limit');
+  // next UTC day the cap resets
+  assert.equal((await watch(store, 'points', NOW + 86_400_000, { live: true })).json.ok, true);
+});
+
+test('withdraw: phone rules, minimum, interval, one phone per player', async () => {
+  const store = new MemoryStore();
+  await api(store, '/api/sync');
+  const row = store.rows.get(42)!;
+  row.state.walletPoints = 6000;
+  assert.equal((await api(store, '/api/withdraw', { phone: '12345' })).json.error, 'bad_phone');
+  row.state.walletPoints = 4000;
+  assert.equal((await api(store, '/api/withdraw', { phone: '٠١٠١٢٣٤٥٦٧٨' })).json.error, 'below_minimum');
+  row.state.walletPoints = 6000;
+  const ok = await api(store, '/api/withdraw', { phone: '+20 101 234 5678' });
+  assert.equal(ok.json.ok, true);
+  assert.equal(ok.json.view.wallet.points, 0);
+  assert.equal(store.wds.length, 1);
+  assert.equal(store.wds[0].phone, '01012345678');
+  assert.equal(store.wds[0].points, 6000);
+
+  store.rows.get(42)!.state.walletPoints = 9000;
+  assert.equal((await api(store, '/api/withdraw', { phone: '01012345678' })).json.error, 'too_soon');
+
+  await api(store, '/api/sync', {}, { id: 77 });
+  store.rows.get(77)!.state.walletPoints = 9000;
+  assert.equal((await api(store, '/api/withdraw', { phone: '01012345678' }, { id: 77 })).json.error, 'phone_taken');
+  assert.equal(store.rows.get(77)!.state.walletPoints, 9000, 'nothing taken on failure');
+});
+
+test('admin: key required, hold period, paid notifies, reject refunds', async () => {
+  const { handleAdmin } = await import('../src/worker/admin.ts');
+  const store = new MemoryStore();
+  await api(store, '/api/sync');
+  store.rows.get(42)!.state.walletPoints = 7000;
+  await api(store, '/api/withdraw', { phone: '01112345678' });
+  const sent: string[] = [];
+  const call = (path: string, body: unknown, now: number, key = 'sec') =>
+    handleAdmin(new Request('https://x.test' + path, { method: 'POST', headers: { 'x-admin-key': key }, body: JSON.stringify(body) }), {
+      store,
+      now,
+      secret: 'sec',
+      notify: async (_id, t) => void sent.push(t),
+    }).then(async (r) => ({ status: r.status, json: (await r.json()) as any }));
+
+  assert.equal((await call('/admin-api/overview', {}, NOW, 'bad')).status, 403);
+  const ov = await call('/admin-api/overview', {}, NOW);
+  assert.equal(ov.json.pending.length, 1);
+  assert.equal(ov.json.stats.pendingPoints, 7000);
+
+  assert.equal((await call('/admin-api/resolve', { id: 1, action: 'paid' }, NOW + 3600_000)).json.error, 'on_hold');
+  assert.equal((await call('/admin-api/resolve', { id: 1, action: 'paid' }, NOW + 49 * 3600_000)).json.ok, true);
+  assert.match(sent[0], /01112345678/);
+  assert.equal((await call('/admin-api/resolve', { id: 1, action: 'rejected' }, NOW + 50 * 3600_000)).json.error, 'already_resolved');
+
+  store.rows.get(42)!.state.walletPoints = 0;
+  store.rows.get(42)!.state.lastWithdrawAt = 0;
+  store.rows.get(42)!.state.walletPoints = 6000;
+  await api(store, '/api/withdraw', { phone: '01112345678' }, { now: NOW + 100 * 3600_000 });
+  assert.equal(store.rows.get(42)!.state.walletPoints, 0);
+  assert.equal((await call('/admin-api/resolve', { id: 2, action: 'rejected', note: 'رقم غلط' }, NOW + 101 * 3600_000)).json.ok, true);
+  assert.equal(store.rows.get(42)!.state.walletPoints, 6000, 'points refunded');
+  assert.equal(store.rows.get(42)!.state.lastWithdrawAt, 0);
 });
 
 test('api: players are isolated and the leaderboard ranks by lifetime earnings', async () => {
@@ -355,4 +455,27 @@ test('bot: ignores groups and updates without a sender; other text gets the butt
   assert.ok(sent[0].reply_markup);
   await start(6, '/help@QaryatAlOmdaBot');
   assert.ok(sent[1].text.includes('القصر'));
+});
+
+test('D1Store: withdrawals, phone check, one-time resolve, stats (real SQL)', async () => {
+  const store = new D1Store(sqliteD1(new DatabaseSync(':memory:')));
+  await store.ensureSchema();
+  const s = newState(NOW);
+  s.walletPoints = 1500;
+  s.lifetimePoints = 9000;
+  s.lifetimeAds = 40;
+  await store.create(1, 'a', s, null, NOW);
+  await store.create(2, 'b', newState(NOW), null, NOW);
+  const id = await store.addWithdrawal({ userId: 1, name: 'a', phone: '01012345678', points: 6000, createdAt: NOW });
+  assert.equal(id, 1);
+  assert.equal(await store.phoneTakenByOther('01012345678', 2), true);
+  assert.equal(await store.phoneTakenByOther('01012345678', 1), false);
+  assert.equal((await store.listWithdrawals('pending', 10)).length, 1);
+  assert.equal((await store.userWithdrawals(1, 10))[0].points, 6000);
+  const st = await store.stats();
+  assert.deepEqual([st.players, st.walletPoints, st.lifetimePoints, st.lifetimeAds, st.pendingPoints], [2, 1500, 9000, 40, 6000]);
+  assert.equal(await store.resolveWithdrawal(id, 'paid', NOW + 1, ''), true);
+  assert.equal(await store.resolveWithdrawal(id, 'rejected', NOW + 2, ''), false, 'cannot resolve twice');
+  assert.equal(await store.phoneTakenByOther('01012345678', 2), true, 'paid still blocks other accounts');
+  assert.equal((await store.stats()).paidPoints, 6000);
 });
