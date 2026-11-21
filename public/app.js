@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.6';
+const APP_VERSION = '0.6.1';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -451,11 +451,17 @@ async function showRewardedAd() {
   const zone = V?.wallet?.adZone;
   if (!zone) return true;
   const show = await loadAdSdk(zone);
-  if (!show) return false;
+  if (!show) {
+    toast('سكريبت الإعلانات ماتحملش (النت أو حاجب إعلانات؟)');
+    return false;
+  }
   try {
     await show({ ymid: String(tg?.initDataUnsafe?.user?.id ?? '') });
     return true;
-  } catch {
+  } catch (e) {
+    // Show Monetag's own reason so a misconfigured zone is easy to spot.
+    const why = typeof e === 'string' ? e : e?.message || e?.error || (e && JSON.stringify(e)) || '';
+    toast('Monetag: ' + String(why).slice(0, 80) || 'مفيش إعلان متاح دلوقتي');
     return false;
   }
 }
