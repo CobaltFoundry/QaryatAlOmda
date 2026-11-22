@@ -80,19 +80,26 @@ export interface GameState {
   /** UTC day number (ms / 86400000) of the last boost claim, and claims made that day. */
   boostDay: number;
   boostClaims: number;
-  /** Wallet, in points (1000 points = 1 EGP). */
-  walletPoints: number;
-  lifetimePoints: number;
   lifetimeAds: number;
-  /** UTC day and count of point-paying ads watched that day. */
-  adDay: number;
-  adCount: number;
   lastAdAt: number;
   /** Outstanding ad ticket: the reward is only granted for the ticket the server issued. */
   ticketId: string;
   ticketKind: string;
   ticketAt: number;
-  lastWithdrawAt: number;
+  /** The last reward collected, that the player may double by watching an ad. */
+  doubleCash: number;
+  /** UTC day of the last streak claim, and the streak day (1..7) reached. */
+  streakLast: number;
+  streakCount: number;
+  /** Daily quest counters (reset each UTC day) and the bitmask of rewards already claimed. */
+  qDay: number;
+  qTaps: number;
+  qBuys: number;
+  qAds: number;
+  qBag: number;
+  qDone: number;
+  /** ms epoch of the last lucky-bag claim. */
+  bagAt: number;
 }
 
 export type ErrorCode =
@@ -110,8 +117,6 @@ export type ErrorCode =
   | 'cooldown'
   | 'bad_ticket'
   | 'too_early'
-  | 'expired'
-  | 'below_minimum'
-  | 'too_soon';
+  | 'expired';
 
 export type Result<T = object> = ({ ok: true; state: GameState } & T) | { ok: false; error: ErrorCode };

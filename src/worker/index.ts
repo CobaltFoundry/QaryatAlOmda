@@ -1,4 +1,3 @@
-import { handleAdmin } from './admin.ts';
 import { handlePostback } from './postback.ts';
 import { handleApi } from './api.ts';
 import { handleUpdate, setupBot } from './bot.ts';
@@ -14,8 +13,6 @@ export interface Env {
   BOT_TOKEN: string;
   /** Secret: any random string of letters, digits, "_" or "-". */
   WEBHOOK_SECRET: string;
-  /** Secret, optional: set to 1 to pay points for ads (only after the ad network works). */
-  ADS_LIVE?: string;
   /** Secret, optional: Monetag zone id for the rewarded ad. */
   MONETAG_ZONE?: string;
   /** Secret, optional: long random string; the same value goes in the Monetag postback URL. */
@@ -50,9 +47,8 @@ const tgCall = (token: string) => async (method: string, body: unknown): Promise
 
 function adsConfig(env: Env) {
   return {
-    live: env.ADS_LIVE === '1' && !!env.MONETAG_ZONE,
+    live: !!(env.MONETAG_ZONE ?? '').replace(/[^0-9]/g, ''),
     zone: (env.MONETAG_ZONE ?? '').replace(/[^0-9]/g, ''),
-    verified: !!env.POSTBACK_SECRET,
   };
 }
 
@@ -87,19 +83,6 @@ export default {
         store: st,
         now: Date.now(),
         secret: env.POSTBACK_SECRET ?? '',
-        live: adsConfig(env).live,
-      });
-    }
-
-    if (path.startsWith('/admin-api/')) {
-      const st = store(env);
-      await schemaReady;
-      const call = tgCall(env.BOT_TOKEN);
-      return handleAdmin(req, {
-        store: st,
-        now: Date.now(),
-        secret: env.WEBHOOK_SECRET ?? '',
-        notify: async (userId, text) => void (await call('sendMessage', { chat_id: userId, text })),
       });
     }
 

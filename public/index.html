@@ -44,6 +44,9 @@
       </div>
 
       <div class="tap-zone" id="tapZone">
+        <button id="bag" class="bag" aria-label="شوال فلوس" hidden>
+          <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true"><path d="M22 10l10 8 10-8-4 12H26z" fill="#c48f1e"/><path d="M26 22h12c10 8 16 18 16 28 0 6-6 10-22 10S10 56 10 50c0-10 6-20 16-28z" fill="#e8b23a"/><text x="32" y="50" text-anchor="middle" font-size="22" font-weight="900" fill="#0f2a2b">£</text></svg>
+        </button>
         <div class="tap-ring">
           <button id="tapBtn" class="tap-btn" aria-label="دوس تجيب فلوس">
             <svg width="120" height="120" viewBox="0 0 120 120" aria-hidden="true">
@@ -66,6 +69,10 @@
         <button id="inviteBtn" class="card action">
           <b>ادعُ صاحبك</b>
           <small>انت وهو تاخدوا ساعة مضاعفة</small>
+        </button>
+        <button id="doubleBtn" class="card action wide" hidden>
+          <b>ضاعف آخر جايزة ×٢</b>
+          <small id="doubleSub"></small>
         </button>
       </div>
       <small id="ver" class="ver"></small>
@@ -97,25 +104,8 @@
       <div class="list" id="blessList"></div>
     </section>
 
-    <section data-tab="wallet" hidden>
-      <div class="card wallet">
-        <small>رصيد المحفظة</small>
-        <div id="walletPts" class="wallet-pts">٠</div>
-        <div id="walletEgp" class="wallet-egp"></div>
-        <div class="bar" aria-hidden="true"><i id="walletBar"></i></div>
-        <small id="walletHint"></small>
-        <button id="adBtn" class="btn big">اتفرج على إعلان واكسب</button>
-        <small id="adSub"></small>
-      </div>
-      <h3 class="section-title">اسحب رصيد موبايل</h3>
-      <div class="card withdraw">
-        <label for="phone">رقم الموبايل (فودافون أو أي شبكة)</label>
-        <input id="phone" type="tel" inputmode="numeric" maxlength="16" placeholder="01XXXXXXXXX" dir="ltr" autocomplete="off">
-        <button id="withdrawBtn" class="btn big">اطلب الشحن</button>
-        <small id="withdrawNote"></small>
-      </div>
-      <h3 class="section-title">طلباتك</h3>
-      <div class="list" id="wdList"></div>
+    <section data-tab="tasks" hidden>
+      <div id="taskBox"></div>
     </section>
 
     <section data-tab="admin" hidden>
@@ -132,7 +122,7 @@
     <button data-go="shop"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1 12H6z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg>المتجر</button>
     <button data-go="upgrades"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V5M5 12l7-7 7 7"/></svg>الترقيات</button>
     <button data-go="prestige"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 6.5 7 .9-5.2 4.8 1.4 7L12 17.8 5.8 21.2l1.4-7L2 9.4l7-.9z"/></svg>التوريث</button>
-    <button data-go="wallet"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7l12-3v3"/><circle cx="16.5" cy="13.5" r="1"/></svg>المحفظة</button>
+    <button data-go="tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h11"/></svg>المهام</button>
     <button data-go="rank"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 20V10M12 20V4M18 20v-7"/></svg>الترتيب</button>
   </nav>
 </div>

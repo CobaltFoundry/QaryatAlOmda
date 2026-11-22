@@ -16,11 +16,11 @@ import type { GameData, GameState } from '../engine/types.ts';
 import type { Store } from './store.ts';
 import { validateInitData } from './telegram.ts';
 import type { TgUser } from './telegram.ts';
-import { adminOverview, adminResolve } from './admin.ts';
 import { buildView } from './view.ts';
 import type { AdsConfig } from './view.ts';
-import { claimAd, normalizePhone, requestWithdraw, startAd } from '../engine/wallet.ts';
-import type { AdKind } from '../engine/wallet.ts';
+import { claimAd, startAd } from '../engine/ads.ts';
+import type { AdKind } from '../engine/ads.ts';
+import { claimBag, claimQuest, claimStreak, noteBuys, noteTaps } from '../engine/daily.ts';
 
 export interface ApiDeps {
   store: Store;
@@ -122,7 +122,8 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/sync':
       return mutate(deps, user, (s, acc) => ({
         ok: true,
-        state: s,
+        // Offline earnings can be doubled with an ad until the next reward replaces them.
+        state: acc.secondsElapsed >= 60 && acc.earned > 0 ? { ...s, doubleCash: acc.earned } : s,
         extra: {
           offline:
             acc.secondsElapsed >= 60
@@ -136,7 +137,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       if (count === null || count < 0) return bad();
       return mutate(deps, user, (s) => {
         const r = applyTaps(s, data, now, count);
-        return { ok: true, state: r.state, extra: { accepted: r.accepted, gained: r.gained } };
+        return { ok: true, state: noteTaps(r.state, r.accepted, now), extra: { accepted: r.accepted, gained: r.gained } };
       });
     }
 
@@ -157,7 +158,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
           qty = n;
         }
         const r = buyAsset(s, data, assetId, qty);
-        return r.ok ? { ok: true, state: r.state, extra: { cost: r.cost, qty: r.qty } } : r;
+        return r.ok ? { ok: true, state: noteBuys(r.state, r.qty, now), extra: { cost: r.cost, qty: r.qty } } : r;
       });
     }
 
@@ -166,7 +167,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       const id = body.id;
       return mutate(deps, user, (s) => {
         const r = buyUpgrade(s, data, id);
-        return r.ok ? { ok: true, state: r.state } : r;
+        return r.ok ? { ok: true, state: noteBuys(r.state, 1, now) } : r;
       });
     }
 
@@ -186,7 +187,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     }
 
     case '/api/ad/start': {
-      const kind = body.kind === 'points' || body.kind === 'boost' ? (body.kind as AdKind) : null;
+      const kind = body.kind === 'boost' || body.kind === 'double' ? (body.kind as AdKind) : null;
       if (!kind) return bad();
       const id = (deps.newId ?? (() => crypto.randomUUID().replace(/-/g, '')))();
       return mutate(deps, user, (s) => {
@@ -199,66 +200,43 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       if (typeof body.ticket !== 'string') return bad();
       const ticket = body.ticket;
       return mutate(deps, user, (s) => {
-        const r = claimAd(s, ticket, now, deps.ads?.live ?? false, deps.ads?.verified ?? false);
-        return r.ok ? { ok: true, state: r.state, extra: { kind: r.kind, points: r.points } } : r;
+        const r = claimAd(s, ticket, now, deps.ads?.live ?? false);
+        return r.ok ? { ok: true, state: r.state, extra: { kind: r.kind, bonus: r.bonus } } : r;
       });
     }
 
-    case '/api/wallet': {
-      const list = await deps.store.userWithdrawals(user.id, 10);
-      return mutate(deps, user, (s) => ({ ok: true, state: s, extra: { withdrawals: list } }));
+    case '/api/streak':
+      return mutate(deps, user, (s) => {
+        const r = claimStreak(s, data, now);
+        return r.ok ? { ok: true, state: r.state, extra: { day: r.day, cash: r.cash, boostMinutes: r.boostMinutes } } : r;
+      });
+
+    case '/api/quest/claim': {
+      if (typeof body.id !== 'string') return bad();
+      const id = body.id;
+      return mutate(deps, user, (s) => {
+        const r = claimQuest(s, data, id, now);
+        return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash, boostMinutes: r.boostMinutes } } : r;
+      });
     }
 
-    case '/api/withdraw': {
-      if (typeof body.phone !== 'string') return bad();
-      const phone = normalizePhone(body.phone);
-      if (!phone) return json({ ok: false, error: 'bad_phone' });
-      if (await deps.store.phoneTakenByOther(phone, user.id)) return json({ ok: false, error: 'phone_taken' });
-      return mutate(
-        deps,
-        user,
-        (s) => {
-          const r = requestWithdraw(s, now);
-          return r.ok ? { ok: true, state: r.state, extra: { points: r.points } } : r;
-        },
-        async (extra) => {
-          const id = await deps.store.addWithdrawal({
-            userId: user.id,
-            name: displayName(user),
-            phone,
-            points: extra!.points as number,
-            createdAt: now,
-          });
-          return { withdrawalId: id };
-        },
-      );
-    }
+    case '/api/bag':
+      return mutate(deps, user, (s) => {
+        const r = claimBag(s, data, now);
+        return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash } } : r;
+      });
 
     case '/api/admin/overview': {
       if (!deps.admin?.ids.includes(user.id)) return json({ ok: false, error: 'forbidden' }, 403);
-      return json(await adminOverview(deps.store, now));
-    }
-
-    case '/api/admin/resolve': {
-      if (!deps.admin?.ids.includes(user.id)) return json({ ok: false, error: 'forbidden' }, 403);
-      return json(await adminResolve({ store: deps.store, now, notify: deps.admin.notify }, body));
+      return json({ ok: true, now, stats: await deps.store.stats() });
     }
 
     case '/api/admin/reset-me': {
-      // Owner-only: restart the game for testing. Wallet, ad counters and withdrawal timing are kept.
+      // Owner-only: restart the game for testing. Ad counters are kept.
       if (!deps.admin?.ids.includes(user.id)) return json({ ok: false, error: 'forbidden' }, 403);
       return mutate(deps, user, (s) => ({
         ok: true,
-        state: {
-          ...newState(now),
-          walletPoints: s.walletPoints,
-          lifetimePoints: s.lifetimePoints,
-          lifetimeAds: s.lifetimeAds,
-          adDay: s.adDay,
-          adCount: s.adCount,
-          lastAdAt: s.lastAdAt,
-          lastWithdrawAt: s.lastWithdrawAt,
-        },
+        state: { ...newState(now), lifetimeAds: s.lifetimeAds, lastAdAt: s.lastAdAt },
       }));
     }
 

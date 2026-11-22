@@ -13,23 +13,14 @@ import {
   tapPower,
 } from '../engine/engine.ts';
 import type { GameData, GameState } from '../engine/types.ts';
-import {
-  AD_COOLDOWN_MS,
-  AD_REWARD_POINTS,
-  MIN_WITHDRAW_POINTS,
-  POINTS_PER_EGP,
-  POINT_ADS_PER_DAY,
-  WITHDRAW_INTERVAL_MS,
-  pointAdsLeft,
-} from '../engine/wallet.ts';
+import { QUESTS, STREAK, bagReady, dayOf, questProgress, streakShown, titleFor } from '../engine/daily.ts';
+import { AD_COOLDOWN_MS } from '../engine/ads.ts';
 
 export interface AdsConfig {
-  /** Real point rewards are only paid when this is true (secret ADS_LIVE=1). */
+  /** An ad network is connected (secret MONETAG_ZONE), so ad-only rewards are available. */
   live: boolean;
   /** Monetag zone id (secret MONETAG_ZONE). */
   zone: string;
-  /** Monetag postbacks are configured: points are credited by the postback only. */
-  verified?: boolean;
   /** The viewer is an admin (shows the admin screen). */
   isAdmin?: boolean;
 }
@@ -45,19 +36,25 @@ export function buildView(state: GameState, data: GameData, now: number, ads: Ad
   return {
     now,
     isAdmin: ads.isAdmin ?? false,
-    wallet: {
-      points: state.walletPoints,
-      pointsPerEgp: POINTS_PER_EGP,
-      minPoints: MIN_WITHDRAW_POINTS,
-      adReward: AD_REWARD_POINTS,
-      adsLeft: pointAdsLeft(state, now),
-      adsPerDay: POINT_ADS_PER_DAY,
-      adLive: ads.live,
-      adZone: ads.zone,
-      verified: ads.verified ?? false,
-      adReadyAt: state.lastAdAt + AD_COOLDOWN_MS,
-      nextWithdrawAt: state.lastWithdrawAt ? state.lastWithdrawAt + WITHDRAW_INTERVAL_MS : 0,
+    title: titleFor(state.prestigeLevel),
+    ads: { live: ads.live, zone: ads.zone, readyAt: state.lastAdAt + AD_COOLDOWN_MS },
+    doubleCash: state.doubleCash,
+    streak: {
+      day: streakShown(state, now),
+      claimedToday: state.streakLast === dayOf(now),
+      rewards: STREAK.map((r) => r[0]),
     },
+    quests: QUESTS.map((q, i) => {
+      const today = state.qDay === dayOf(now);
+      return {
+        id: q.id,
+        target: q.target,
+        progress: today ? Math.min(q.target, questProgress(state, q.id)) : 0,
+        claimed: today && (state.qDone & (1 << i)) !== 0,
+      };
+    }),
+    questChest: state.qDay === dayOf(now) && (state.qDone & (1 << QUESTS.length)) !== 0 ? 'claimed' : QUESTS.every((_, i) => state.qDay === dayOf(now) && (state.qDone & (1 << i)) !== 0) ? 'ready' : 'locked',
+    bagReady: bagReady(state, now),
     cash: state.cash,
     runEarned: state.runEarned,
     lifetimeEarned: state.lifetimeEarned,

@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.7.2';
+const APP_VERSION = '0.9';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -159,10 +159,6 @@ const ERRORS = {
   bad_ticket: () => 'الإعلان ماتحسبش، جرب تاني',
   too_early: () => 'لازم تكمل الإعلان للآخر',
   expired: () => 'الإعلان خلص وقته، جرب تاني',
-  below_minimum: () => 'الرصيد لسه أقل من الحد الأدنى',
-  too_soon: () => 'تقدر تسحب مرة كل أسبوع',
-  bad_phone: () => 'اكتب رقم موبايل مصري صح (01XXXXXXXXX)',
-  phone_taken: () => 'الرقم ده مستخدم مع حساب تاني',
 };
 
 async function act(path, body) {
@@ -195,10 +191,14 @@ function applyView(view) {
 function renderHeader() {
   const user = tg?.initDataUnsafe?.user;
   $('#whoName').textContent = user?.first_name || 'عمدة';
-  $('#whoLevel').textContent = 'توريث ' + ar(V.prestigeLevel);
+  $('#whoLevel').textContent = V.title + (V.prestigeLevel ? ' · توريث ' + ar(V.prestigeLevel) : '');
   $('#adminBtn').hidden = !V.isAdmin;
   $('#starsChip').textContent = fmt(V.stars) + ' نجمة';
   $('#tapInfo').textContent = fmt(V.tapPower) + ' جنيه في الضغطة  ·  أوفلاين لحد ' + ar(V.offlineCapHours) + ' ساعة';
+  const dbl = $('#doubleBtn');
+  dbl.hidden = !(V.ads.live && V.doubleCash > 0);
+  $('#doubleSub').textContent = 'تاخد ' + fmt(V.doubleCash) + ' جنيه زيادة';
+  renderBag();
   const left = V.boostClaimsLeft;
   $('#boostBtn').disabled = left <= 0;
   $('#boostSub').textContent = left > 0 ? 'نص ساعة، متبقي ' + ar(left) + ' النهاردة' : 'خلصت النهاردة، تعال بكرة';
@@ -374,7 +374,7 @@ function renderTab() {
   if (tab === 'shop') renderShop();
   else if (tab === 'upgrades') renderUpgrades();
   else if (tab === 'prestige') renderPrestige();
-  else if (tab === 'wallet') renderWallet();
+  else if (tab === 'tasks') renderTasks();
   else if (tab === 'admin') renderAdmin();
 }
 
@@ -450,7 +450,7 @@ function loadAdSdk(zone) {
 
 /** Shows an ad. Resolves true only if the network says it was completed. With no ad zone there is nothing to show. */
 async function showRewardedAd(ymid) {
-  const zone = V?.wallet?.adZone;
+  const zone = V?.ads?.zone;
   if (!zone) return true;
   const show = await loadAdSdk(zone);
   if (!show) {
@@ -461,7 +461,6 @@ async function showRewardedAd(ymid) {
     await show({ ymid });
     return true;
   } catch (e) {
-    // Show Monetag's own reason so a misconfigured zone is easy to spot.
     const why = typeof e === 'string' ? e : e?.message || e?.error || (e && JSON.stringify(e)) || '';
     toast('Monetag: ' + String(why).slice(0, 80) || 'مفيش إعلان متاح دلوقتي');
     return false;
@@ -469,12 +468,7 @@ async function showRewardedAd(ymid) {
 }
 
 let adBusy = false;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/**
- * start ticket -> show ad -> reward.
- * The ymid we give Monetag ties the paid impression to this player. When postbacks are set up
- * (wallet.verified) points arrive from Monetag's server, so we wait for them; otherwise we claim.
- */
+/** start ticket -> show ad -> claim. The ymid ties Monetag's paid impression to this player. */
 async function watchAd(kind) {
   if (adBusy) return null;
   adBusy = true;
@@ -482,22 +476,8 @@ async function watchAd(kind) {
     const st = await act('/api/ad/start', { kind });
     if (!st) return null;
     const uid = tg?.initDataUnsafe?.user?.id ?? 0;
-    const ymid = (kind === 'points' ? 'p_' : 'b_') + uid + '_' + st.ticket;
-    if (!(await showRewardedAd(ymid))) {
+    if (!(await showRewardedAd((kind === 'boost' ? 'b_' : 'd_') + uid + '_' + st.ticket))) {
       toast('الإعلان ماكملش، جرب تاني');
-      return null;
-    }
-    if (kind === 'points' && V.wallet.verified) {
-      const before = V.wallet.points;
-      for (let i = 0; i < 10; i++) {
-        await sleep(2500);
-        const w = await act('/api/wallet');
-        if (w) {
-          wdHistory = w.withdrawals || wdHistory;
-          if (V.wallet.points > before) return { points: V.wallet.points - before };
-        }
-      }
-      toast('الإعلان لسه بيتأكد، النقاط هتوصل خلال دقايق');
       return null;
     }
     return await act('/api/ad/claim', { ticket: st.ticket });
@@ -514,12 +494,35 @@ async function claimBoost() {
   }
 }
 
+async function doubleReward() {
+  const r = await watchAd('double');
+  if (r) {
+    haptic('success');
+    toast('اتضاعفت! +' + fmt(r.bonus) + ' جنيه');
+  }
+}
+
+// ---- Lucky money bag ------------------------------------------------------------
+function renderBag() {
+  const bag = $('#bag');
+  const was = !bag.hidden;
+  bag.hidden = !V.bagReady;
+  if (V.bagReady && !was) {
+    bag.style.left = 6 + Math.random() * 62 + '%';
+    bag.style.top = 4 + Math.random() * 60 + '%';
+  }
+}
+
+async function takeBag() {
+  const r = await act('/api/bag');
+  if (r) {
+    haptic('success');
+    toast('شوال فلوس! +' + fmt(r.cash) + ' جنيه');
+  }
+}
+
 // ---- Admin (only for the owner; the server checks ADMIN_IDS) -----------------
 let adminData = null;
-const agoText = (ms) => {
-  const hrs = Math.floor(ms / 3_600_000);
-  return hrs < 1 ? 'من أقل من ساعة' : hrs < 48 ? 'من ' + ar(hrs) + ' ساعة' : 'من ' + ar(Math.floor(hrs / 24)) + ' يوم';
-};
 
 async function loadAdmin() {
   await flushTaps();
@@ -531,76 +534,28 @@ async function loadAdmin() {
   renderAdmin();
 }
 
-async function adminAct(id, action, note) {
-  const r = await call('/api/admin/resolve', { id, action, note });
-  toast(r.ok ? 'تم' : r.error === 'on_hold' ? 'لسه مقفول للمراجعة' : 'حصل خطأ');
-  loadAdmin();
-}
-
 function renderAdmin() {
   const d = adminData;
   const box = $('#adminBox');
   if (!d || !d.ok) return box.replaceChildren(h('div', { class: 'card', text: 'مش مسموح' }));
   const s = d.stats;
   const stat = (label, value) => h('div', { class: 'card stat' }, h('small', { text: label }), h('b', { text: value }));
-  const usd = s.revenueUsd;
-  const cost = s.owedEgp + s.paidEgp;
-  const fx = Number(localStorage.getItem('omda_fx') || 50);
-  const margin = usd * fx - cost;
-  const pending = d.pending.map((w) => {
-    const hold = d.now - w.createdAt < d.holdMs;
-    return h(
-      'div',
-      { class: 'card' },
-      h('div', { text: w.name + '  ·  ' + agoText(d.now - w.createdAt) }),
-      h('div', { class: 'phone', text: w.phone }),
-      h('div', { text: ar((w.points / d.pointsPerEgp).toFixed(2)) + ' جنيه' }),
-      hold ? h('small', { text: 'مقفول للمراجعة ٤٨ ساعة' }) : null,
-      h(
-        'div',
-        { class: 'btnrow' },
-        h('button', { class: 'btn', text: 'انسخ الرقم', onclick: () => { navigator.clipboard?.writeText(w.phone); toast('اتنسخ'); } }),
-        h('button', {
-          class: 'btn',
-          text: 'اتشحن ✅',
-          disabled: hold,
-          onclick: async () => {
-            if (await confirmAsk('أكدت إنك شحنت ' + ar(w.phone) + ' بمبلغ ' + ar((w.points / d.pointsPerEgp).toFixed(2)) + ' جنيه؟')) adminAct(w.id, 'paid', '');
-          },
-        }),
-        h('button', {
-          class: 'btn off',
-          text: 'ارفض',
-          onclick: async () => {
-            if (await confirmAsk('رفض الطلب وإرجاع النقاط للاعب؟')) adminAct(w.id, 'rejected', '');
-          },
-        }),
-      ),
-    );
-  });
-  const recent = d.recent.map((w) =>
-    h('div', { class: 'row' }, h('div', { class: 'txt' }, h('b', { text: (w.status === 'paid' ? '✅ ' : '❌ ') + w.name }), h('small', { text: w.phone + ' · ' + ar((w.points / d.pointsPerEgp).toFixed(2)) + ' جنيه' }))),
-  );
   box.replaceChildren(
     h(
       'div',
       { class: 'stats' },
       stat('لاعبين', ar(s.players)),
-      stat('أحداث إعلانات', ar(s.adEvents)),
-      stat('إيراد Monetag ($)', ar(usd.toFixed(4))),
-      stat('اتدفع + علينا (جنيه)', ar(cost.toFixed(2))),
+      stat('إعلانات اتشافت', ar(s.lifetimeAds)),
+      stat('أحداث Monetag', ar(s.adEvents)),
+      stat('إيراد تقديري ($)', ar(s.revenueUsd.toFixed(4))),
     ),
-    h('div', { class: 'card', text: 'صافي تقريبي بسعر دولار ' + ar(fx) + ' جنيه: ' + ar(margin.toFixed(2)) + ' جنيه ' + (margin >= 0 ? '(ربح)' : '(خسارة)') }),
-    h('h3', { class: 'section-title', text: 'طلبات السحب (' + ar(d.pending.length) + ')' }),
-    h('div', { class: 'list' }, pending.length ? pending : [h('small', { text: 'مفيش طلبات' })]),
-    h('h3', { class: 'section-title', text: 'آخر اللي اتعالج' }),
-    h('div', { class: 'list' }, recent.length ? recent : [h('small', { text: 'لسه مفيش' })]),
+    h('div', { class: 'card', text: 'الإيراد ده تقدير من Monetag، والرصيد النهائي بتشوفه في حسابك عندهم.' }),
     h('h3', { class: 'section-title', text: 'اختبار' }),
     h('button', {
       class: 'btn off big',
       text: 'ابدأ اللعبة من الأول (حسابي بس)',
       onclick: async () => {
-        if (!(await confirmAsk('هتبدأ اللعبة من الصفر (الفلوس والنجوم والبركات). المحفظة والإعلانات مش هتتأثر. متأكد؟'))) return;
+        if (!(await confirmAsk('هتبدأ اللعبة من الصفر (الفلوس والنجوم والبركات). متأكد؟'))) return;
         const r = await act('/api/admin/reset-me');
         if (r) {
           toast('اتعمل إعادة ضبط');
@@ -611,65 +566,84 @@ function renderAdmin() {
   );
 }
 
-let wdHistory = [];
-const STATUS_AR = { pending: 'قيد المراجعة', paid: 'اتشحن', rejected: 'مرفوض' };
+// ---- Daily tasks (streak + quests) -----------------------------------------------
+const QUEST_TEXT = {
+  tap: 'دوس على العمدة',
+  buy: 'اشتري ١٠ مستويات أو ترقيات',
+  ad: 'اتفرج على إعلان واحد',
+  bag: 'خد شوال الفلوس',
+};
 
-function renderWallet() {
-  const w = V.wallet;
-  const egp = w.points / w.pointsPerEgp;
-  $('#walletPts').textContent = ar(Math.floor(w.points)) + ' نقطة';
-  $('#walletEgp').textContent = '= ' + ar(egp.toFixed(2)) + ' جنيه';
-  $('#walletBar').style.width = Math.min(100, (w.points / w.minPoints) * 100) + '%';
-  $('#walletHint').textContent =
-    w.points >= w.minPoints
-      ? 'تقدر تسحب دلوقتي'
-      : 'الحد الأدنى للسحب ' + ar(w.minPoints / w.pointsPerEgp) + ' جنيه، باقي ' + ar(w.minPoints - w.points) + ' نقطة';
-  const btn = $('#adBtn');
-  btn.disabled = !w.adLive || w.adsLeft <= 0;
-  $('#adSub').textContent = !w.adLive
-    ? 'الإعلانات لسه ما اتفعلتش'
-    : w.adsLeft > 0
-      ? 'كل إعلان ' + ar(w.adReward) + ' نقاط، متبقي ' + ar(w.adsLeft) + ' النهاردة'
-      : 'خلصت إعلانات النهاردة، تعال بكرة';
-  const nextOk = w.nextWithdrawAt && serverNow() < w.nextWithdrawAt;
-  $('#withdrawBtn').disabled = w.points < w.minPoints || !!nextOk;
-  $('#withdrawNote').textContent = nextOk
-    ? 'تقدر تسحب تاني بعد ' + ar(Math.ceil((w.nextWithdrawAt - serverNow()) / 86_400_000)) + ' يوم'
-    : 'الشحن بيتم يدوي خلال يومين تقريباً، هيجيلك إشعار من البوت أول ما يتم';
-  $('#wdList').replaceChildren(
-    ...wdHistory.map((x) =>
-      h(
-        'div',
-        { class: 'row' },
-        h(
+function renderTasks() {
+  const st = V.streak;
+  const days = st.rewards.map((m, i) => {
+    const n = i + 1;
+    const done = n < st.day || (n === st.day && st.claimedToday);
+    return h('div', { class: 'day' + (done ? ' done' : '') + (n === 7 ? ' big' : '') }, h('b', { text: ar(n) }), h('small', { text: ar(m) + ' د' }));
+  });
+  const nextDay = st.claimedToday ? st.day : st.day === 7 || st.day === 0 ? 1 : st.day + 1;
+  $('#taskBox').replaceChildren(
+    h(
+      'div',
+      { class: 'card streak' },
+      h('b', { text: 'مكافأة الدخول اليومي' }),
+      h('small', { text: 'ادخل كل يوم من غير ما تفوّت. اليوم السابع فيه ساعة دخل ×٢' }),
+      h('div', { class: 'days' }, days),
+      h('button', {
+        class: 'btn big',
+        text: st.claimedToday ? 'خدتها النهاردة، تعال بكرة' : 'خد مكافأة اليوم ' + ar(nextDay),
+        disabled: st.claimedToday,
+        onclick: claimStreak,
+      }),
+    ),
+    h('h3', { class: 'section-title', text: 'مهام النهاردة' }),
+    h(
+      'div',
+      { class: 'list' },
+      V.quests.map((q) => {
+        const ready = q.progress >= q.target && !q.claimed;
+        return h(
           'div',
-          { class: 'txt' },
-          h('b', { text: ar((x.points / w.pointsPerEgp).toFixed(2)) + ' جنيه' }),
-          h('small', { text: ar(x.phone) }),
-        ),
-        h('span', { class: 'badge ' + x.status, text: STATUS_AR[x.status] || x.status }),
-      ),
+          { class: 'row' },
+          h(
+            'div',
+            { class: 'txt' },
+            h('b', { text: QUEST_TEXT[q.id] }),
+            h('small', { text: q.claimed ? 'خلصت' : ar(Math.min(q.progress, q.target)) + ' / ' + ar(q.target) }),
+            h('div', { class: 'bar' }, h('i', { style: 'width:' + Math.min(100, (q.progress / q.target) * 100) + '%' })),
+          ),
+          h('button', { class: 'btn' + (ready ? '' : ' off'), text: q.claimed ? 'تم' : 'خد', disabled: !ready, onclick: () => claimQuest(q.id) }),
+        );
+      }),
+    ),
+    h(
+      'div',
+      { class: 'card chest' },
+      h('b', { text: 'صندوق العمدة' }),
+      h('small', { text: 'خلّص المهام كلها وخد ساعة دخل ونص ساعة ×٢' }),
+      h('button', {
+        class: 'btn big',
+        text: V.questChest === 'claimed' ? 'اتفتح النهاردة' : V.questChest === 'ready' ? 'افتح الصندوق' : 'لسه مقفول',
+        disabled: V.questChest !== 'ready',
+        onclick: () => claimQuest('chest'),
+      }),
     ),
   );
 }
 
-async function loadWallet() {
-  const r = await act('/api/wallet');
+async function claimStreak() {
+  const r = await act('/api/streak');
   if (r) {
-    wdHistory = r.withdrawals || [];
-    renderWallet();
+    haptic('success');
+    toast('اليوم ' + ar(r.day) + '! +' + fmt(r.cash) + ' جنيه' + (r.boostMinutes ? ' وساعة ×٢' : ''));
   }
 }
 
-async function doWithdraw() {
-  const phone = $('#phone').value.trim();
-  if (!phone) return toast(ERRORS.bad_phone());
-  if (!(await confirmAsk('هنشحن الرقم ' + ar(phone) + ' بكل رصيدك. متأكد إن الرقم صح؟'))) return;
-  const r = await act('/api/withdraw', { phone });
+async function claimQuest(id) {
+  const r = await act('/api/quest/claim', { id });
   if (r) {
     haptic('success');
-    toast('اتسجل الطلب، هنشحنلك قريب');
-    await loadWallet();
+    toast('+' + fmt(r.cash) + ' جنيه' + (r.boostMinutes ? ' ونص ساعة ×٢' : ''));
   }
 }
 
@@ -802,7 +776,6 @@ function goTo(next) {
   $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.go === next));
   $('main').scrollTop = 0;
   if (next === 'rank') renderRank();
-  else if (next === 'wallet') loadWallet();
   else if (next === 'admin') loadAdmin();
   else renderTab();
 }
@@ -815,14 +788,8 @@ $$('#qty button').forEach((b) =>
 );
 $('#prestigeBtn').addEventListener('click', doPrestige);
 $('#boostBtn').addEventListener('click', claimBoost);
-$('#adBtn').addEventListener('click', async () => {
-  const r = await watchAd('points');
-  if (r) {
-    haptic('success');
-    toast('+' + ar(r.points) + ' نقطة في محفظتك');
-  }
-});
-$('#withdrawBtn').addEventListener('click', doWithdraw);
+$('#doubleBtn').addEventListener('click', doubleReward);
+$('#bag').addEventListener('click', takeBag);
 $('#adminBtn').addEventListener('click', () => goTo('admin'));
 $('#inviteBtn').addEventListener('click', invite);
 $('#offlineOk').addEventListener('click', () => ($('#offline').hidden = true));
