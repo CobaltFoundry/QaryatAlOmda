@@ -100,6 +100,10 @@ export interface GameState {
   qDone: number;
   /** ms epoch of the last lucky-bag claim. */
   bagAt: number;
+  /** Last push sent to this player (ms), 0 = never. One push per absence. */
+  notifiedAt: number;
+  /** True after /mute or when Telegram says the bot was blocked. */
+  notifyOff: boolean;
 }
 
 export type ErrorCode =

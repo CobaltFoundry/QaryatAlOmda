@@ -1,6 +1,7 @@
 import { handlePostback } from './postback.ts';
 import { handleApi } from './api.ts';
 import { handleUpdate, setupBot } from './bot.ts';
+import { runPush } from './push.ts';
 import type { TgUpdate } from './bot.ts';
 import { gameData } from './data.ts';
 import { D1Store } from './store.ts';
@@ -22,6 +23,7 @@ export interface Env {
 }
 
 let schemaReady: Promise<void> | null = null;
+let originSaved = '';
 
 function store(env: Env): D1Store {
   const s = new D1Store(env.DB);
@@ -93,6 +95,10 @@ export default {
       try {
         const st = store(env);
         await schemaReady;
+        if (originSaved !== url.origin) {
+          await st.setMeta('origin', url.origin);
+          originSaved = url.origin;
+        }
         await handleUpdate((await req.json()) as TgUpdate, {
           store: st,
           origin: url.origin,
@@ -110,6 +116,10 @@ export default {
     if (path === '/setup') {
       if (!env.BOT_TOKEN || !env.WEBHOOK_SECRET) return text('Set BOT_TOKEN and WEBHOOK_SECRET first', 500);
       if (url.searchParams.get('key') !== env.WEBHOOK_SECRET) return text('forbidden', 403);
+      const st = store(env);
+      await schemaReady;
+      await st.setMeta('origin', url.origin);
+      originSaved = url.origin;
       const result = await setupBot(url.origin, env.WEBHOOK_SECRET, tgCall(env.BOT_TOKEN));
       return new Response(JSON.stringify(result, null, 2), {
         headers: { 'content-type': 'application/json; charset=utf-8' },
@@ -117,5 +127,15 @@ export default {
     }
 
     return env.ASSETS.fetch(req);
+  },
+  /** Cron trigger (every 30 minutes): nudges players who have been away. */
+  async scheduled(_event: unknown, env: Env): Promise<void> {
+    if (!env.BOT_TOKEN) return;
+    const st = store(env);
+    await schemaReady;
+    // No request here, so the game's address was saved by the webhook.
+    const origin = (await st.getMeta('origin')) ?? '';
+    if (!origin) return;
+    await runPush(st, gameData, tgCall(env.BOT_TOKEN), origin, Date.now());
   },
 };

@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.9';
+const APP_VERSION = '0.10';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -800,6 +800,30 @@ function mmss(ms) {
   return ar(String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'));
 }
 
+// "How far to the next purchase": the cheapest unlocked asset.
+function etaText(sec) {
+  if (sec < 60) return 'أقل من دقيقة';
+  if (sec < 3600) return ar(Math.ceil(sec / 60)) + ' دقيقة';
+  if (sec < 86400) return ar(Math.ceil(sec / 3600)) + ' ساعة';
+  return 'أكتر من يوم';
+}
+function updateGoal() {
+  const box = $('#goal');
+  const open = V.assets.filter((a) => a.unlocked);
+  if (!open.length) {
+    box.hidden = true;
+    return;
+  }
+  const next = open.reduce((m, a) => (a.cost < m.cost ? a : m));
+  box.hidden = false;
+  $('#goalFill').style.width = Math.min(100, (cash / next.cost) * 100).toFixed(1) + '%';
+  const cps = curCps();
+  $('#goalText').textContent =
+    cash >= next.cost
+      ? 'تقدر تشتري ' + next.name + ' دلوقتي'
+      : 'فاضل ' + fmt(next.cost - cash) + ' على ' + next.name + (cps > 0 ? '  ·  حوالي ' + etaText((next.cost - cash) / cps) : '');
+}
+
 function tick() {
   const now = Date.now();
   if (V) cash += (curCps() * (now - cashAt)) / 1000;
@@ -807,6 +831,7 @@ function tick() {
   $('#cash').textContent = fmt(cash);
   if (!V) return;
   const boosted = serverNow() < V.boostUntil;
+  updateGoal();
   $('#cps').textContent = 'دخلك ' + rate(curCps()) + ' جنيه في الثانية';
   const badge = $('#boostBadge');
   badge.hidden = !boosted;
@@ -819,7 +844,7 @@ async function sync(first) {
   if (!r.ok) return;
   applyView(r.view);
   if (r.offline && r.offline.earned >= 1) {
-    const vars = { amount: fmt(r.offline.earned), hours: ar(V.offlineCapHours) };
+    const vars = { amount: fmt(r.offline.earned), hours: V.offlineCapHours === 1 ? 'ساعة' : V.offlineCapHours === 2 ? 'ساعتين' : ar(V.offlineCapHours) + ' ساعات' };
     $('#offlineText').textContent = r.offline.capped ? say('offline_capped', vars) : say('offline_welcome', vars);
     $('#offline').hidden = false;
   } else if (first) {

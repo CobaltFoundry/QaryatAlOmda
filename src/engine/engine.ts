@@ -8,11 +8,12 @@ import type {
 } from './types.ts';
 
 // ---- Tunable constants (balancing happens here) -----------------------------
-export const BASE_OFFLINE_HOURS = 2;
+export const BASE_OFFLINE_HOURS = 1;
+export const MAX_OFFLINE_HOURS = 3;
 export const MAX_TAPS_PER_SECOND = 15;
 export const TAP_BURST_ALLOWANCE = 10;
 export const PRESTIGE_MIN_EARNED = 1e9;
-export const PRESTIGE_THRESHOLD_GROWTH = 2.5;
+export const PRESTIGE_THRESHOLD_GROWTH = 8;
 export const STAR_BONUS_PER_STAR = 0.5; // applied to sqrt(lifetimeStars): diminishing returns
 export const BOOST_MULTIPLIER = 2;
 export const MAX_BUY_QTY = 1000;
@@ -55,6 +56,8 @@ export function newState(now: number): GameState {
     qBag: 0,
     qDone: 0,
     bagAt: 0,
+    notifiedAt: 0,
+    notifyOff: false,
   };
 }
 
@@ -156,7 +159,7 @@ export function offlineCapSeconds(state: GameState, data: GameData): number {
   for (const p of data.prestigeUpgrades) {
     if (p.type === 'offline_hours') hours += p.valuePerLevel * prestigeUpgradeLevel(state, p.id);
   }
-  return hours * 3600;
+  return Math.min(hours, MAX_OFFLINE_HOURS) * 3600;
 }
 
 // ---- Time: credit idle income ----------------------------------------------

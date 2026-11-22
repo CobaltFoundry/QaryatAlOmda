@@ -530,3 +530,78 @@ test('in-app admin: only listed ids, overview shows revenue, reset restarts the 
   const after = store.rows.get(42)!.state;
   assert.deepEqual([after.prestigeLevel, after.stars, after.lifetimeStars, after.lifetimeAds], [0, 0, 0, 12]);
 });
+
+// ---- push notifications ----
+import { runPush } from '../src/worker/push.ts';
+
+const H = 3_600_000;
+async function pushWith(store: Store, sent: any[], reply: any, now: number) {
+  return runPush(store, gameData, async (m: string, b: any) => (sent.push({ m, ...b }), reply), 'https://x.dev', now, () => 0);
+}
+
+test('push: only players away 3-72h, once per absence, with a Mini App button', async () => {
+  const store = new MemoryStore();
+  for (const id of [1, 2, 3, 4]) await store.create(id, 'p' + id, newState(NOW), null, NOW);
+  // 1: 1h ago (too soon), 2: 5h ago, 3: 100h ago (gave up), 4: 5h ago but muted
+  (store as any).touched.set(1, NOW - 1 * H);
+  (store as any).touched.set(2, NOW - 5 * H);
+  (store as any).touched.set(3, NOW - 100 * H);
+  (store as any).touched.set(4, NOW - 5 * H);
+  store.rows.get(4)!.state.notifyOff = true;
+
+  const sent: any[] = [];
+  assert.equal(await pushWith(store, sent, { ok: true }, NOW), 1);
+  assert.equal(sent[0].chat_id, 2);
+  assert.equal(sent[0].reply_markup.inline_keyboard[0][0].web_app.url, 'https://x.dev');
+  // second run: already notified for this absence
+  assert.equal(await pushWith(store, sent, { ok: true }, NOW + H), 0);
+  // player 1 (touched at NOW-1h) is now 6h idle too; player 2 comes back and leaves again
+  const row = (await store.get(2))!;
+  await store.save({ ...row, state: { ...row.state, lastSeen: NOW + 2 * H } }, NOW + 2 * H);
+  assert.equal(await pushWith(store, sent, { ok: true }, NOW + 6 * H), 2);
+});
+
+test('push: a blocked bot (403) mutes the player for good', async () => {
+  const store = new MemoryStore();
+  await store.create(7, 'p', newState(NOW), null, NOW - 5 * H);
+  const sent: any[] = [];
+  assert.equal(await pushWith(store, sent, { ok: false, error_code: 403 }, NOW), 0);
+  assert.equal(store.rows.get(7)!.state.notifyOff, true);
+  assert.equal(await pushWith(store, sent, { ok: true }, NOW + 5 * H), 0);
+});
+
+test('push: a temporary failure is retried next run', async () => {
+  const store = new MemoryStore();
+  await store.create(8, 'p', newState(NOW), null, NOW - 5 * H);
+  const sent: any[] = [];
+  assert.equal(await pushWith(store, sent, { ok: false, error_code: 429 }, NOW), 0);
+  assert.equal(store.rows.get(8)!.state.notifiedAt, 0);
+  assert.equal(await pushWith(store, sent, { ok: true }, NOW + 1000), 1);
+});
+
+test('push: the real SQL query selects the same players', async () => {
+  const db = new DatabaseSync(':memory:');
+  const store = new D1Store(sqliteD1(db));
+  await store.ensureSchema();
+  await store.create(1, 'a', newState(NOW), null, NOW - 5 * H);
+  await store.create(2, 'b', newState(NOW), null, NOW - 1 * H);
+  await store.create(3, 'c', { ...newState(NOW), notifyOff: true }, null, NOW - 5 * H);
+  const sent: any[] = [];
+  assert.equal(await pushWith(store, sent, { ok: true }, NOW), 1);
+  assert.deepEqual(sent.map((s) => s.chat_id), [1]);
+  assert.equal(await pushWith(store, sent, { ok: true }, NOW + 1000), 0);
+  await store.setMeta('origin', 'https://a.dev');
+  await store.setMeta('origin', 'https://b.dev');
+  assert.equal(await store.getMeta('origin'), 'https://b.dev');
+});
+
+test('bot: /mute and /unmute toggle notifications', async () => {
+  const { store, sent, start } = botHarness();
+  await start(11, '/mute');
+  assert.ok(sent[0].text.includes('/start')); // unknown player
+  await start(11, '/start');
+  await start(11, '/mute');
+  assert.equal(store.rows.get(11)!.state.notifyOff, true);
+  await start(11, '/unmute');
+  assert.equal(store.rows.get(11)!.state.notifyOff, false);
+});

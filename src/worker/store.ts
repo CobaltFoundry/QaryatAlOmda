@@ -47,6 +47,10 @@ export interface Store {
   rank(lifetime: number, hide?: number[]): Promise<number>;
   /** Records a Monetag postback. False if this (ymid, event) was already recorded (retries, duplicates). */
   addAdEvent(e: AdEvent): Promise<boolean>;
+  /** Players whose last save was between `from` and `to` (ms), not muted, not yet notified since. */
+  listIdle(from: number, to: number, limit: number): Promise<PlayerRow[]>;
+  getMeta(key: string): Promise<string | null>;
+  setMeta(key: string, value: string): Promise<void>;
   stats(): Promise<Stats>;
 }
 
@@ -76,6 +80,7 @@ const SCHEMA = [
     created_at INTEGER NOT NULL,
     PRIMARY KEY (ymid, event)
   )`,
+  'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)',
 ];
 
 export class D1Store implements Store {
@@ -143,6 +148,26 @@ export class D1Store implements Store {
       .run();
     return (r.meta?.changes ?? 0) === 1;
   }
+  async getMeta(key: string): Promise<string | null> {
+    const r = await this.db.prepare('SELECT v FROM meta WHERE k = ?').bind(key).first<{ v: string }>();
+    return r?.v ?? null;
+  }
+  async setMeta(key: string, value: string): Promise<void> {
+    await this.db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').bind(key, value).run();
+  }
+  async listIdle(from: number, to: number, limit: number): Promise<PlayerRow[]> {
+    const r = await this.db
+      .prepare(
+        `SELECT user_id, name, state, version, referrer FROM players
+         WHERE updated_at > ? AND updated_at < ?
+           AND COALESCE(json_extract(state, '$.notifyOff'), 0) = 0
+           AND COALESCE(json_extract(state, '$.notifiedAt'), 0) < updated_at
+         ORDER BY updated_at ASC LIMIT ?`,
+      )
+      .bind(from, to, limit)
+      .all<{ user_id: number; name: string; state: string; version: number; referrer: number | null }>();
+    return r.results.map((x) => ({ userId: x.user_id, name: x.name, state: parseState(x.state, Date.now()), version: x.version, referrer: x.referrer }));
+  }
   async stats(): Promise<Stats> {
     const rev = await this.db
       .prepare('SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS usd FROM ad_events')
@@ -162,14 +187,24 @@ export class MemoryStore implements Store {
     const r = this.rows.get(userId);
     return r ? structuredClone(r) : null;
   }
-  async create(userId: number, name: string, state: GameState, referrer: number | null): Promise<boolean> {
+  async create(userId: number, name: string, state: GameState, referrer: number | null, now = 0): Promise<boolean> {
     if (this.rows.has(userId)) return false;
+    this.touched.set(userId, now);
     this.rows.set(userId, structuredClone({ userId, name, state, version: 0, referrer }));
     return true;
   }
-  async save(row: PlayerRow): Promise<boolean> {
+  meta = new Map<string, string>();
+  async getMeta(key: string) {
+    return this.meta.get(key) ?? null;
+  }
+  async setMeta(key: string, value: string) {
+    this.meta.set(key, value);
+  }
+  touched = new Map<number, number>();
+  async save(row: PlayerRow, now = 0): Promise<boolean> {
     const cur = this.rows.get(row.userId);
     if (!cur || cur.version !== row.version) return false;
+    this.touched.set(row.userId, now);
     this.rows.set(row.userId, structuredClone({ ...row, version: row.version + 1 }));
     return true;
   }
@@ -183,6 +218,17 @@ export class MemoryStore implements Store {
   }
   async rank(lifetime: number, hide: number[] = []) {
     return [...this.rows.entries()].filter(([id, r]) => !hide.includes(id) && r.state.lifetimeEarned > lifetime).length + 1;
+  }
+
+  async listIdle(from: number, to: number, limit: number): Promise<PlayerRow[]> {
+    return [...this.rows.values()]
+      .filter((r) => {
+        const t = this.touched.get(r.userId) ?? 0;
+        return t > from && t < to && !r.state.notifyOff && r.state.notifiedAt < t;
+      })
+      .sort((a, b) => (this.touched.get(a.userId) ?? 0) - (this.touched.get(b.userId) ?? 0))
+      .slice(0, limit)
+      .map((r) => structuredClone(r));
   }
 
   events = new Map<string, AdEvent>();

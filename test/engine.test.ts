@@ -115,15 +115,15 @@ test('accrue credits income for elapsed time', () => {
   assert.equal(r.capped, false);
 });
 
-test('accrue: offline cap of 2h, extended by upgrades and prestige', () => {
+test('accrue: offline cap of 1h, extended by upgrades, never above 3h', () => {
   const owner = st({ assetLevels: { '1': 10 } });
   const tenHours = T0 + 10 * 3600_000;
   const r = accrue(owner, data, tenHours);
-  assert.equal(r.secondsCredited, 7200);
-  assert.equal(r.earned, 72_000);
+  assert.equal(r.secondsCredited, 3600);
+  assert.equal(r.earned, 36_000);
   assert.equal(r.capped, true);
-  assert.equal(accrue({ ...owner, upgrades: ['u_off'] }, data, tenHours).earned, 144_000);
-  assert.equal(offlineCapSeconds({ ...owner, prestigeUpgrades: { p_off: 3 } }, data), 8 * 3600);
+  assert.equal(accrue({ ...owner, upgrades: ['u_off'] }, data, tenHours).earned, 108_000);
+  assert.equal(offlineCapSeconds({ ...owner, prestigeUpgrades: { p_off: 3 } }, data), 3 * 3600);
 });
 
 test('accrue: a clock that goes backwards credits nothing', () => {
@@ -171,7 +171,7 @@ test('prestige: gate, star formula and reset', () => {
   assert.equal(prestigeStarsGain(st({ runEarned: 1e9 })), 1);
   assert.equal(prestigeStarsGain(st({ runEarned: 8e9 })), 2);
   assert.equal(prestigeStarsGain(st({ runEarned: 1e9, prestigeLevel: 1 })), 0);
-  assert.equal(prestigeStarsGain(st({ runEarned: 2.5e9, prestigeLevel: 1 })), 1);
+  assert.equal(prestigeStarsGain(st({ runEarned: 8e9, prestigeLevel: 1 })), 1);
   assert.deepEqual(doPrestige(st({ runEarned: 5e8 }), data, T0), { ok: false, error: 'not_ready' });
 
   const before = st({

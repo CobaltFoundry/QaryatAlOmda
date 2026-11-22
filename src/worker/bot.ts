@@ -71,6 +71,18 @@ export async function handleUpdate(update: TgUpdate, deps: BotDeps): Promise<voi
     return;
   }
 
+  if (command === '/mute' || command === '/unmute') {
+    const off = command === '/mute';
+    const ok = await updatePlayer(store, msg.from.id, now, (s) => ({ ...s, notifyOff: off }));
+    const text = !ok
+      ? 'ابدأ اللعب الأول بـ /start.'
+      : off
+        ? 'تمام يا عمدة، مش هبعتلك تنبيهات تاني. لو عاوزها ارجع ابعت /unmute.'
+        : 'تمام، هنبهك لما الخزنة تتملي. 🔔';
+    await call('sendMessage', { chat_id: chatId, text });
+    return;
+  }
+
   if (command === '/help') {
     await call('sendMessage', { chat_id: chatId, text: HELP_TEXT, reply_markup: playKeyboard(origin) });
     return;
@@ -132,6 +144,8 @@ export async function setupBot(origin: string, webhookSecret: string, call: TgCa
       commands: [
         { command: 'start', description: 'ابدأ اللعب' },
         { command: 'help', description: 'إزاي تلعب' },
+        { command: 'mute', description: 'وقف التنبيهات' },
+        { command: 'unmute', description: 'شغل التنبيهات' },
       ],
     }),
   };
