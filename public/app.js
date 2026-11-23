@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.10';
+const APP_VERSION = '0.10.2';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -800,7 +800,7 @@ function mmss(ms) {
   return ar(String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'));
 }
 
-// "How far to the next purchase": the cheapest unlocked asset.
+// "How far to the next purchase": the next new asset to buy.
 function etaText(sec) {
   if (sec < 60) return 'أقل من دقيقة';
   if (sec < 3600) return ar(Math.ceil(sec / 60)) + ' دقيقة';
@@ -814,7 +814,10 @@ function updateGoal() {
     box.hidden = true;
     return;
   }
-  const next = open.reduce((m, a) => (a.cost < m.cost ? a : m));
+  // Goal = the cheapest unlocked asset not bought yet (the thing that was just unlocked);
+  // when everything open is already owned, the cheapest upgrade of those.
+  const fresh = open.filter((a) => !a.level);
+  const next = (fresh.length ? fresh : open).reduce((m, a) => (a.cost < m.cost ? a : m));
   box.hidden = false;
   $('#goalFill').style.width = Math.min(100, (cash / next.cost) * 100).toFixed(1) + '%';
   const cps = curCps();
