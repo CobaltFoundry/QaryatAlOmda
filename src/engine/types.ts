@@ -102,6 +102,15 @@ export interface GameState {
   bagAt: number;
   /** Last push sent to this player (ms), 0 = never. One push per absence. */
   notifiedAt: number;
+  /** Invitees' lifetime earnings already paid out as "الواسطة". */
+  wasetaSeen: number;
+  /** Keys of event occurrences already claimed (last few). */
+  evClaimed: string[];
+  /** Tax collector visit: fee (0 = none), hidden bag multiplier, expiry, earliest next visit. */
+  taxCost: number;
+  taxMult: number;
+  taxExp: number;
+  taxNextAt: number;
   /** True after /mute or when Telegram says the bot was blocked. */
   notifyOff: boolean;
 }

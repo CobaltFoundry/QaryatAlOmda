@@ -13,7 +13,9 @@ import {
   tapPower,
 } from '../engine/engine.ts';
 import type { GameData, GameState } from '../engine/types.ts';
-import { QUESTS, STREAK, bagReady, dayOf, questProgress, streakShown, titleFor } from '../engine/daily.ts';
+import { taxOpen } from '../engine/tax.ts';
+import { activeEvent, eventClaimed } from '../engine/events.ts';
+import { QUESTS, STREAK, bagReady, dayOf, questProgress, streakShown, titleFor, wasetaPending } from '../engine/daily.ts';
 import { AD_COOLDOWN_MS } from '../engine/ads.ts';
 
 export interface AdsConfig {
@@ -26,7 +28,13 @@ export interface AdsConfig {
 }
 
 /** Everything the Mini App needs to draw a screen. The client never computes game rules. */
-export function buildView(state: GameState, data: GameData, now: number, ads: AdsConfig = { live: false, zone: '' }) {
+export function buildView(
+  state: GameState,
+  data: GameData,
+  now: number,
+  ads: AdsConfig = { live: false, zone: '' },
+  invitees?: { count: number; lifetime: number },
+) {
   const day = Math.floor(now / 86_400_000);
   const claimsToday = state.boostDay === day ? state.boostClaims : 0;
   const stars = prestigeStarsGain(state);
@@ -39,6 +47,13 @@ export function buildView(state: GameState, data: GameData, now: number, ads: Ad
     title: titleFor(state.prestigeLevel),
     ads: { live: ads.live, zone: ads.zone, readyAt: state.lastAdAt + AD_COOLDOWN_MS },
     doubleCash: state.doubleCash,
+    tax: taxOpen(state, now) ? { cost: state.taxCost, expiresAt: state.taxExp } : null,
+    event: (() => {
+      const ev = activeEvent(now);
+      return ev ? { name: ev.name, blurb: ev.blurb, endsAt: ev.endsAt, claimed: eventClaimed(state, ev) } : null;
+    })(),
+    // Only sent when the server looked it up (sync and claim); the app keeps the last value otherwise.
+    waseta: invitees ? { count: invitees.count, pending: wasetaPending(state, invitees.lifetime) } : undefined,
     streak: {
       day: streakShown(state, now),
       claimedToday: state.streakLast === dayOf(now),

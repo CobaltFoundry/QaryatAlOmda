@@ -75,6 +75,8 @@ test('strings: only allowed placeholders, and required ones are present', () => 
     prestige_done: ['stars'],
     boost_on: ['minutes'],
     invite_friend: ['name'],
+    tax_paid: ['bag', 'mult'],
+    tax_jackpot: ['bag', 'mult'],
   };
   for (const [key, list] of Object.entries(strings)) {
     assert.ok(list.length > 0, key);

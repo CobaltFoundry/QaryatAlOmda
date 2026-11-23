@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.10.2';
+const APP_VERSION = '0.13';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -180,6 +180,8 @@ async function act(path, body) {
 
 // ---- View ---------------------------------------------------------------------
 function applyView(view) {
+  // The server only looks up الواسطة on sync and claim; keep the last value in between.
+  if (!view.waseta && V) view.waseta = V.waseta;
   V = view;
   clockOffset = view.now - Date.now();
   cash = view.cash + pending * view.tapPower;
@@ -193,6 +195,25 @@ function renderHeader() {
   $('#whoName').textContent = user?.first_name || 'عمدة';
   $('#whoLevel').textContent = V.title + (V.prestigeLevel ? ' · توريث ' + ar(V.prestigeLevel) : '');
   $('#adminBtn').hidden = !V.isAdmin;
+  const tx = V.tax;
+  $('#taxCard').hidden = !tx;
+  if (tx) {
+    $('#taxTitle').textContent = '🧾 ' + say('tax_offer');
+    $('#taxSub').textContent = 'الحصيلة عليك ' + fmt(tx.cost) + ' جنيه، وادفع تاخد شوال حظ';
+    $('#taxPay').textContent = 'ادفع ' + fmt(tx.cost);
+  }
+  const ev = V.event;
+  $('#eventBtn').hidden = !(ev && !ev.claimed);
+  if (ev) {
+    $('#eventTitle').textContent = '✨ ' + ev.name + ': خد جايزتك';
+    $('#eventSub').textContent = ev.blurb;
+  }
+  const w = V.waseta;
+  $('#wasetaBtn').hidden = !(w && w.count > 0);
+  if (w) {
+    $('#wasetaTitle').textContent = w.pending >= 1 ? 'خد واسطتك: ' + fmt(w.pending) + ' جنيه' : 'الواسطة · ' + ar(w.count) + ' من صحابك';
+    $('#wasetaSub').textContent = w.pending >= 1 ? '٥٪ من اللي كسبوه' : '٥٪ من اللي بيكسبوه بتيجيلك';
+  }
   $('#starsChip').textContent = fmt(V.stars) + ' نجمة';
   $('#tapInfo').textContent = fmt(V.tapPower) + ' جنيه في الضغطة  ·  أوفلاين لحد ' + ar(V.offlineCapHours) + ' ساعة';
   const dbl = $('#doubleBtn');
@@ -647,6 +668,18 @@ async function claimQuest(id) {
   }
 }
 
+async function claimWaseta() {
+  if (V.waseta && V.waseta.pending >= 1) {
+    const r = await act('/api/waseta', {});
+    if (r) {
+      haptic('success');
+      toast('الواسطة جابتلك ' + fmt(r.cash) + ' جنيه');
+    }
+  } else {
+    invite();
+  }
+}
+
 function invite() {
   const uid = tg?.initDataUnsafe?.user?.id;
   if (!uid) return;
@@ -792,6 +825,25 @@ $('#doubleBtn').addEventListener('click', doubleReward);
 $('#bag').addEventListener('click', takeBag);
 $('#adminBtn').addEventListener('click', () => goTo('admin'));
 $('#inviteBtn').addEventListener('click', invite);
+$('#wasetaBtn').addEventListener('click', claimWaseta);
+$('#taxPay').addEventListener('click', async () => {
+  const r = await act('/api/tax/pay', {});
+  if (r) {
+    haptic(r.mult >= 5 ? 'success' : 'light');
+    toast(say(r.mult >= 5 ? 'tax_jackpot' : 'tax_paid', { bag: fmt(r.bag), mult: ar(r.mult) }));
+  }
+});
+$('#taxDodge').addEventListener('click', async () => {
+  const r = await act('/api/tax/dodge', {});
+  if (r) toast(say('tax_dodged'));
+});
+$('#eventBtn').addEventListener('click', async () => {
+  const r = await act('/api/event/claim', {});
+  if (r) {
+    haptic('success');
+    toast(r.name + ': +' + fmt(r.cash) + ' جنيه' + (r.boostMinutes ? ' وساعة ×٢' : ''));
+  }
+});
 $('#offlineOk').addEventListener('click', () => ($('#offline').hidden = true));
 
 // ---- Clock ---------------------------------------------------------------------

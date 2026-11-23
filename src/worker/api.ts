@@ -20,7 +20,9 @@ import { buildView } from './view.ts';
 import type { AdsConfig } from './view.ts';
 import { claimAd, startAd } from '../engine/ads.ts';
 import type { AdKind } from '../engine/ads.ts';
-import { claimBag, claimQuest, claimStreak, noteBuys, noteTaps } from '../engine/daily.ts';
+import { dodgeTax, maybeOfferTax, payTax } from '../engine/tax.ts';
+import { claimEvent } from '../engine/events.ts';
+import { claimBag, claimQuest, claimStreak, claimWaseta, noteBuys, noteTaps } from '../engine/daily.ts';
 
 export interface ApiDeps {
   store: Store;
@@ -32,6 +34,8 @@ export interface ApiDeps {
   admin?: { ids: number[]; notify: (userId: number, text: string) => Promise<void> };
   /** Ticket id generator; tests can pin it. */
   newId?: () => string;
+  /** Random source (tests pin it). */
+  rand?: () => number;
 }
 
 type Body = Record<string, unknown>;
@@ -67,6 +71,7 @@ async function mutate(
   user: TgUser,
   fn: Mutation,
   after?: (extra: Record<string, unknown> | undefined) => Promise<Record<string, unknown> | void>,
+  invitees?: { count: number; lifetime: number },
 ): Promise<Response> {
   const { store, data, now } = deps;
   const name = displayName(user);
@@ -81,7 +86,7 @@ async function mutate(
 
     const acc = accrue(row.state, data, now);
     const out = fn(acc.state, acc);
-    if (!out.ok) return json({ ok: false, error: out.error, view: buildView(acc.state, data, now, adsFor(deps, user)) });
+    if (!out.ok) return json({ ok: false, error: out.error, view: buildView(acc.state, data, now, adsFor(deps, user), invitees) });
 
     const saved = await store.save({ ...row, name, state: out.state }, now);
     if (!saved) continue; // someone else wrote first: reload and retry
@@ -89,7 +94,7 @@ async function mutate(
     const before = unlockedIds(acc.state, data);
     const newly = data.assets.filter((a) => isAssetUnlocked(out.state, a) && !before.has(a.id)).map((a) => a.name);
     const more = after ? await after(out.extra) : undefined;
-    return json({ ok: true, view: buildView(out.state, data, now, adsFor(deps, user)), newlyUnlocked: newly, ...out.extra, ...more });
+    return json({ ok: true, view: buildView(out.state, data, now, adsFor(deps, user), invitees), newlyUnlocked: newly, ...out.extra, ...more });
   }
   return json({ ok: false, error: 'busy' }, 409);
 }
@@ -119,18 +124,45 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
   const bad = () => json({ ok: false, error: 'bad_request' }, 400);
 
   switch (new URL(req.url).pathname) {
-    case '/api/sync':
-      return mutate(deps, user, (s, acc) => ({
-        ok: true,
-        // Offline earnings can be doubled with an ad until the next reward replaces them.
-        state: acc.secondsElapsed >= 60 && acc.earned > 0 ? { ...s, doubleCash: acc.earned } : s,
-        extra: {
-          offline:
-            acc.secondsElapsed >= 60
-              ? { earned: acc.earned, seconds: acc.secondsCredited, capped: acc.capped }
-              : null,
+    case '/api/sync': {
+      const inv = await deps.store.invitees(user.id);
+      return mutate(
+        deps,
+        user,
+        (s, acc) => ({
+          ok: true,
+          // Offline earnings can be doubled with an ad until the next reward replaces them.
+          state: maybeOfferTax(
+            acc.secondsElapsed >= 60 && acc.earned > 0 ? { ...s, doubleCash: acc.earned } : s,
+            data,
+            now,
+            deps.rand ?? Math.random,
+          ),
+          extra: {
+            offline:
+              acc.secondsElapsed >= 60
+                ? { earned: acc.earned, seconds: acc.secondsCredited, capped: acc.capped }
+                : null,
+          },
+        }),
+        undefined,
+        inv,
+      );
+    }
+
+    case '/api/waseta': {
+      const inv = await deps.store.invitees(user.id);
+      return mutate(
+        deps,
+        user,
+        (s) => {
+          const r = claimWaseta(s, inv.lifetime);
+          return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash } } : r;
         },
-      }));
+        undefined,
+        inv,
+      );
+    }
 
     case '/api/tap': {
       const count = asInt(body.count);
@@ -219,6 +251,21 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
         return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash, boostMinutes: r.boostMinutes } } : r;
       });
     }
+
+    case '/api/tax/pay':
+      return mutate(deps, user, (s) => {
+        const r = payTax(s, now);
+        return r.ok ? { ok: true, state: r.state, extra: { cost: r.cost, bag: r.bag, mult: r.mult } } : r;
+      });
+
+    case '/api/tax/dodge':
+      return mutate(deps, user, (s) => dodgeTax(s, now));
+
+    case '/api/event/claim':
+      return mutate(deps, user, (s) => {
+        const r = claimEvent(s, data, now);
+        return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash, boostMinutes: r.boostMinutes, name: r.name } } : r;
+      });
 
     case '/api/bag':
       return mutate(deps, user, (s) => {

@@ -49,6 +49,8 @@ export interface Store {
   addAdEvent(e: AdEvent): Promise<boolean>;
   /** Players whose last save was between `from` and `to` (ms), not muted, not yet notified since. */
   listIdle(from: number, to: number, limit: number): Promise<PlayerRow[]>;
+  /** How many players this one invited and their combined lifetime earnings. */
+  invitees(referrerId: number): Promise<{ count: number; lifetime: number }>;
   getMeta(key: string): Promise<string | null>;
   setMeta(key: string, value: string): Promise<void>;
   stats(): Promise<Stats>;
@@ -72,6 +74,7 @@ const SCHEMA = [
     updated_at INTEGER NOT NULL
   )`,
   'CREATE INDEX IF NOT EXISTS idx_players_lifetime ON players (lifetime DESC)',
+  'CREATE INDEX IF NOT EXISTS idx_players_referrer ON players (referrer)',
   `CREATE TABLE IF NOT EXISTS ad_events (
     ymid TEXT NOT NULL,
     event TEXT NOT NULL,
@@ -148,6 +151,13 @@ export class D1Store implements Store {
       .run();
     return (r.meta?.changes ?? 0) === 1;
   }
+  async invitees(referrerId: number): Promise<{ count: number; lifetime: number }> {
+    const r = await this.db
+      .prepare('SELECT COUNT(*) AS n, COALESCE(SUM(lifetime), 0) AS l FROM players WHERE referrer = ?')
+      .bind(referrerId)
+      .first<{ n: number; l: number }>();
+    return { count: r?.n ?? 0, lifetime: r?.l ?? 0 };
+  }
   async getMeta(key: string): Promise<string | null> {
     const r = await this.db.prepare('SELECT v FROM meta WHERE k = ?').bind(key).first<{ v: string }>();
     return r?.v ?? null;
@@ -192,6 +202,10 @@ export class MemoryStore implements Store {
     this.touched.set(userId, now);
     this.rows.set(userId, structuredClone({ userId, name, state, version: 0, referrer }));
     return true;
+  }
+  async invitees(referrerId: number) {
+    const rows = [...this.rows.values()].filter((r) => r.referrer === referrerId);
+    return { count: rows.length, lifetime: rows.reduce((a, r) => a + r.state.lifetimeEarned, 0) };
   }
   meta = new Map<string, string>();
   async getMeta(key: string) {

@@ -110,6 +110,24 @@ export function claimBag(state: GameState, data: GameData, now: number): Result<
   return { ok: true, state: { ...credit(s, cash), bagAt: now, qBag: s.qBag + 1, doubleCash: cash }, cash };
 }
 
+// ---- الواسطة: a share of what invited friends earn ----------------------------
+export const WASETA_RATE = 0.05;
+/** One payout can never exceed this share of the player's own lifetime earnings (keeps it a bonus, not the main income). */
+export const WASETA_CAP_SHARE = 0.25;
+
+export function wasetaPending(state: GameState, inviteesLifetime: number): number {
+  return Math.max(0, Math.floor((inviteesLifetime - state.wasetaSeen) * WASETA_RATE));
+}
+
+export function claimWaseta(state: GameState, inviteesLifetime: number): Result<{ cash: number }> {
+  const pending = wasetaPending(state, inviteesLifetime);
+  if (pending < 1) return { ok: false, error: 'not_ready' };
+  const cash = Math.min(pending, Math.max(1000, Math.floor(state.lifetimeEarned * WASETA_CAP_SHARE)));
+  // Only the paid part is marked as seen, the rest stays claimable.
+  const seen = cash === pending ? inviteesLifetime : state.wasetaSeen + cash / WASETA_RATE;
+  return { ok: true, state: { ...credit(state, cash), wasetaSeen: seen, doubleCash: cash }, cash };
+}
+
 // ---- Titles -------------------------------------------------------------------
 /** [from prestige level, title]. The ladder climbs with every inheritance and "عمدة" is the top. */
 export const TITLES: readonly (readonly [number, string])[] = [

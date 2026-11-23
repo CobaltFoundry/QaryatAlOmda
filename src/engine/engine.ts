@@ -57,6 +57,12 @@ export function newState(now: number): GameState {
     qDone: 0,
     bagAt: 0,
     notifiedAt: 0,
+    wasetaSeen: 0,
+    evClaimed: [],
+    taxCost: 0,
+    taxMult: 0,
+    taxExp: 0,
+    taxNextAt: 0,
     notifyOff: false,
   };
 }

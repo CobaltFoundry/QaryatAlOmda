@@ -605,3 +605,146 @@ test('bot: /mute and /unmute toggle notifications', async () => {
   await start(11, '/unmute');
   assert.equal(store.rows.get(11)!.state.notifyOff, false);
 });
+
+// ---- الواسطة ----
+test('waseta: 5% of invitees\' earnings, claimable in parts, capped, and both stores agree', async () => {
+  const store = new MemoryStore();
+  await api(store, '/api/sync', {}, { id: 42, now: D0 });
+  const none = await api(store, '/api/sync', {}, { id: 42, now: D0 + 1000 });
+  assert.deepEqual(none.json.view.waseta, { count: 0, pending: 0 });
+  assert.equal((await api(store, '/api/waseta', {}, { id: 42, now: D0 + 1000 })).json.error, 'not_ready');
+
+  store.rows.get(42)!.state.lifetimeEarned = 1e6;
+  // two friends join through 42 and earn
+  await store.create(7, 'a', { ...newState(D0), lifetimeEarned: 10_000 }, 42, D0);
+  await store.create(8, 'b', { ...newState(D0), lifetimeEarned: 30_000 }, 42, D0);
+  const sync = await api(store, '/api/sync', {}, { id: 42, now: D0 + 2000 });
+  assert.deepEqual(sync.json.view.waseta, { count: 2, pending: 2000 });
+  // other calls keep the last value instead of querying
+  assert.equal((await api(store, '/api/tap', { count: 1 }, { id: 42, now: D0 + 2500 })).json.view?.waseta, undefined);
+
+  const claim = await api(store, '/api/waseta', {}, { id: 42, now: D0 + 3000 });
+  assert.equal(claim.json.ok, true);
+  assert.equal(claim.json.cash, 2000);
+  assert.equal(claim.json.view.waseta.pending, 0);
+  assert.equal(store.rows.get(42)!.state.doubleCash, 2000);
+  assert.equal((await api(store, '/api/waseta', {}, { id: 42, now: D0 + 4000 })).json.error, 'not_ready', 'no double pay');
+
+  // friend earns more: only the new part pays
+  store.rows.get(7)!.state.lifetimeEarned = 110_000;
+  assert.equal((await api(store, '/api/waseta', {}, { id: 42, now: D0 + 5000 })).json.cash, 5000);
+});
+
+test('waseta: one payout is capped by the player\'s own lifetime, the rest stays claimable', async () => {
+  const store = new MemoryStore();
+  await api(store, '/api/sync', {}, { id: 42, now: D0 });
+  await store.create(7, 'a', { ...newState(D0), lifetimeEarned: 1e9 }, 42, D0); // pending 5e7
+  const first = await api(store, '/api/waseta', {}, { id: 42, now: D0 + 1000 });
+  assert.equal(first.json.cash, 1000); // minimum cap since the player has earned almost nothing
+  const second = await api(store, '/api/waseta', {}, { id: 42, now: D0 + 2000 });
+  assert.equal(second.json.ok, true);
+  assert.ok(Math.abs(first.json.cash + second.json.cash - 2000) < 5);
+});
+
+test('waseta: the real SQL counts only players invited by this one', async () => {
+  const store = new D1Store(sqliteD1(new DatabaseSync(':memory:')));
+  await store.ensureSchema();
+  await store.create(1, 'boss', newState(NOW), null, NOW);
+  await store.create(2, 'x', { ...newState(NOW), lifetimeEarned: 500 }, 1, NOW);
+  await store.create(3, 'y', { ...newState(NOW), lifetimeEarned: 700 }, 1, NOW);
+  await store.create(4, 'z', { ...newState(NOW), lifetimeEarned: 999 }, 2, NOW);
+  assert.deepEqual(await store.invitees(1), { count: 2, lifetime: 1200 });
+  assert.deepEqual(await store.invitees(9), { count: 0, lifetime: 0 });
+});
+
+// ---- events ----
+import { activeEvent } from '../src/engine/events.ts';
+
+test('events: Friday-noon rain, Ramadan iftar, Eid; nothing otherwise', () => {
+  const fri = Date.UTC(2026, 10, 27, 10, 0); // Friday 27 Nov 2026, 10:00 UTC
+  assert.equal(new Date(fri).getUTCDay(), 5);
+  assert.equal(activeEvent(fri)?.kind, 'rain');
+  assert.equal(activeEvent(Date.UTC(2026, 10, 27, 12, 0)), null, 'window closed');
+  assert.equal(activeEvent(Date.UTC(2026, 10, 26, 10, 0)), null, 'Thursday');
+  assert.equal(activeEvent(Date.UTC(2027, 1, 10, 15, 0))?.kind, 'iftar'); // Ramadan afternoon
+  assert.equal(activeEvent(Date.UTC(2027, 1, 10, 9, 0)), null, 'Ramadan morning');
+  assert.equal(activeEvent(Date.UTC(2027, 2, 10, 8, 0))?.kind, 'eid');
+  // Eid wins over the Friday rain (9 Mar 2027 is a Tuesday; 12 Mar is a Friday inside the Eid period)
+  assert.equal(activeEvent(Date.UTC(2027, 2, 12, 10, 0))?.kind, 'eid');
+});
+
+test('events: claim once per occurrence, again next week', async () => {
+  const store = new MemoryStore();
+  const fri = Date.UTC(2026, 10, 27, 10, 0);
+  const sync = await api(store, '/api/sync', {}, { now: fri });
+  assert.equal(sync.json.view.event.name, 'مطر دهب');
+  assert.equal(sync.json.view.event.claimed, false);
+  const r = await api(store, '/api/event/claim', {}, { now: fri + 1000 });
+  assert.equal(r.json.ok, true);
+  assert.equal(r.json.cash, 800);
+  assert.equal(r.json.view.event.claimed, true);
+  assert.equal((await api(store, '/api/event/claim', {}, { now: fri + 2000 })).json.error, 'limit');
+  assert.equal((await api(store, '/api/event/claim', {}, { now: fri + 4 * 3600_000 })).json.error, 'not_ready');
+  const next = fri + 7 * 86_400_000;
+  assert.equal((await api(store, '/api/event/claim', {}, { now: next })).json.ok, true);
+  assert.equal(store.rows.get(42)!.state.evClaimed.length, 2);
+});
+
+test('events: Eid also gives an hour of x2', async () => {
+  const store = new MemoryStore();
+  const eid = Date.UTC(2027, 2, 10, 8, 0);
+  const r = await api(store, '/api/event/claim', {}, { now: eid });
+  assert.equal(r.json.cash, 5000);
+  assert.ok(store.rows.get(42)!.state.boostUntil >= eid + 3600_000);
+});
+
+// ---- tax collector ----
+import { TAX_MULTS, maybeOfferTax, payTax } from '../src/engine/tax.ts';
+
+test('tax: the bag is always worth more than the fee, and the odds add up', () => {
+  assert.ok(Math.abs(TAX_MULTS.reduce((a, m) => a + m[0], 0) - 1) < 1e-9);
+  assert.ok(TAX_MULTS.every((m) => m[1] > 1));
+  const ev = TAX_MULTS.reduce((a, m) => a + m[0] * m[1], 0);
+  assert.ok(ev > 1.5 && ev < 2.5, 'expected value ' + ev);
+});
+
+test('tax: offer -> pay -> bag, then a quiet hour', async () => {
+  const store = new MemoryStore();
+  const rand = () => 0.7; // lands in the x2 bracket (0.55-0.90)
+  const call = async (path: string, now: number, body: unknown = {}) => {
+    const auth = 'tma ' + (await initData(42, Math.floor(now / 1000)));
+    const res = await handleApi(
+      new Request('https://x.test' + path, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+      { store, botToken: TOKEN, now, data: gameData, rand, ads: { live: false, zone: '' } },
+    );
+    return (await res.json()) as any;
+  };
+  await call('/api/sync', D0);
+  assert.equal((await call('/api/sync', D0 + 1000)).view.tax, null, 'too poor for a visit');
+  const row = (await store.get(42))!;
+  await store.save({ ...row, state: { ...row.state, cash: 10_000 } }, D0 + 1500);
+
+  const offer = await call('/api/sync', D0 + 2000);
+  assert.equal(offer.view.tax.cost, 50); // 5% of 10 000 = 500, but capped at 5 minutes of the tiny starting income
+  assert.equal(JSON.stringify(offer.view).includes('taxMult'), false, 'the roll stays hidden');
+
+  const paid = await call('/api/tax/pay', D0 + 3000);
+  assert.equal(paid.ok, true);
+  assert.equal(paid.bag, 100); // x2
+  assert.equal(paid.mult, 2);
+  const st = store.rows.get(42)!.state;
+  assert.ok(st.cash >= 10_000 - 50 + 100 - 5, 'net gain, fee spent and bag credited');
+  assert.equal(st.doubleCash, 100, 'the bag can be doubled with an ad');
+  assert.equal((await call('/api/tax/pay', D0 + 4000)).error, 'not_ready');
+  assert.equal((await call('/api/sync', D0 + 600_000)).view.tax, null, 'quiet for an hour');
+  assert.ok((await call('/api/sync', D0 + 3_700_000)).view.tax, 'back after an hour');
+});
+
+test('tax: dodging costs nothing, offers expire, and you need the cash', () => {
+  let s = { ...newState(NOW), cash: 1000 };
+  s = maybeOfferTax(s, gameData, NOW, () => 0.1);
+  assert.equal(s.taxCost, 50);
+  assert.equal(payTax({ ...s, cash: 10 }, NOW).ok, false);
+  assert.equal(payTax(s, NOW + 16 * 60_000).ok, false, 'expired');
+  assert.equal(maybeOfferTax({ ...s, taxCost: 0, taxExp: 0 }, gameData, NOW, () => 0.1).taxCost, 50);
+});
