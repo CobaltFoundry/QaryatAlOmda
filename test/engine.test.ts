@@ -171,7 +171,7 @@ test('prestige: gate, star formula and reset', () => {
   assert.equal(prestigeStarsGain(st({ runEarned: 1e9 })), 1);
   assert.equal(prestigeStarsGain(st({ runEarned: 8e9 })), 2);
   assert.equal(prestigeStarsGain(st({ runEarned: 1e9, prestigeLevel: 1 })), 0);
-  assert.equal(prestigeStarsGain(st({ runEarned: 4e10, prestigeLevel: 1 })), 1);
+  assert.equal(prestigeStarsGain(st({ runEarned: 4e9, prestigeLevel: 1 })), 1);
   assert.deepEqual(doPrestige(st({ runEarned: 5e8 }), data, T0), { ok: false, error: 'not_ready' });
 
   const before = st({

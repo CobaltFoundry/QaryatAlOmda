@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.14.2';
+const APP_VERSION = '0.15';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';

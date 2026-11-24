@@ -6,7 +6,7 @@
     "starCost": 1,
     "starCostGrowth": 3,
     "type": "income_mult",
-    "valuePerLevel": 0.25,
+    "valuePerLevel": 0.1,
     "maxLevel": 10
   },
   {
@@ -16,7 +16,7 @@
     "starCost": 3,
     "starCostGrowth": 3,
     "type": "income_mult",
-    "valuePerLevel": 0.5,
+    "valuePerLevel": 0.2,
     "maxLevel": 5
   },
   {
@@ -26,7 +26,7 @@
     "starCost": 10,
     "starCostGrowth": 3,
     "type": "income_mult",
-    "valuePerLevel": 1,
+    "valuePerLevel": 0.5,
     "maxLevel": 3
   },
   {
@@ -86,7 +86,7 @@
     "starCost": 4,
     "starCostGrowth": 2.0,
     "type": "start_cash",
-    "valuePerLevel": 1000000,
+    "valuePerLevel": 100000,
     "maxLevel": 8
   },
   {
@@ -96,7 +96,7 @@
     "starCost": 12,
     "starCostGrowth": 2.0,
     "type": "start_cash",
-    "valuePerLevel": 100000000.0,
+    "valuePerLevel": 10000000,
     "maxLevel": 5
   }
 ]
