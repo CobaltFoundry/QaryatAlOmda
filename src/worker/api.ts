@@ -21,6 +21,7 @@ import type { AdsConfig } from './view.ts';
 import { claimAd, startAd } from '../engine/ads.ts';
 import type { AdKind } from '../engine/ads.ts';
 import { dodgeTax, maybeOfferTax, payTax } from '../engine/tax.ts';
+import { addPts, cleanGuildName, GUILD_MAX, guildCode, guildPerk, weekIndex } from '../engine/league.ts';
 import { claimEvent } from '../engine/events.ts';
 import { claimBag, claimQuest, claimStreak, claimWaseta, noteBuys, noteTaps } from '../engine/daily.ts';
 
@@ -121,19 +122,45 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
   }
 
   const { data, now } = deps;
+  const path = new URL(req.url).pathname;
+  // Weekly guild score: what each kind of action is worth.
+  const PTS: Record<string, number> = {
+    '/api/buy': 20,
+    '/api/upgrade': 20,
+    '/api/streak': 50,
+    '/api/quest/claim': 50,
+    '/api/bag': 50,
+    '/api/tax/pay': 30,
+    '/api/event/claim': 30,
+    '/api/ad/claim': 40,
+  };
+  const mut = (fn: Parameters<typeof mutate>[2], after?: Parameters<typeof mutate>[3], inv?: Parameters<typeof mutate>[4]) =>
+    mutate(
+      deps,
+      user,
+      (s, acc) => {
+        const r = fn(s, acc);
+        if (!r.ok) return r;
+        const taps = path === '/api/tap' ? Number((r.extra as { accepted?: number } | undefined)?.accepted ?? 0) * 0.2 : 0;
+        return { ...r, state: addPts(r.state, (PTS[path] ?? 0) + taps, now) };
+      },
+      after,
+      inv,
+    );
   const bad = () => json({ ok: false, error: 'bad_request' }, 400);
 
   switch (new URL(req.url).pathname) {
     case '/api/sync': {
       const inv = await deps.store.invitees(user.id);
-      return mutate(
-        deps,
-        user,
+      // Keep the cached guild size (it drives the income perk) fresh.
+      const me = await deps.store.get(user.id);
+      const guildSize = me?.state.guildId ? await deps.store.guildCount(me.state.guildId) : 0;
+      return mut(
         (s, acc) => ({
           ok: true,
           // Offline earnings can be doubled with an ad until the next reward replaces them.
           state: maybeOfferTax(
-            acc.secondsElapsed >= 60 && acc.earned > 0 ? { ...s, doubleCash: acc.earned } : s,
+            { ...(acc.secondsElapsed >= 60 && acc.earned > 0 ? { ...s, doubleCash: acc.earned } : s), guildSize: s.guildId ? guildSize : 0 },
             data,
             now,
             deps.rand ?? Math.random,
@@ -152,9 +179,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
 
     case '/api/waseta': {
       const inv = await deps.store.invitees(user.id);
-      return mutate(
-        deps,
-        user,
+      return mut(
         (s) => {
           const r = claimWaseta(s, inv.lifetime);
           return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash } } : r;
@@ -167,7 +192,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/tap': {
       const count = asInt(body.count);
       if (count === null || count < 0) return bad();
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = applyTaps(s, data, now, count);
         return { ok: true, state: noteTaps(r.state, r.accepted, now), extra: { accepted: r.accepted, gained: r.gained } };
       });
@@ -177,7 +202,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       const assetId = asInt(body.assetId);
       if (assetId === null) return bad();
       const qtyRaw = body.qty ?? 1;
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         let qty: number;
         if (qtyRaw === 'max') {
           const asset = data.assets.find((a) => a.id === assetId);
@@ -197,14 +222,14 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/upgrade': {
       if (typeof body.id !== 'string') return bad();
       const id = body.id;
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = buyUpgrade(s, data, id);
         return r.ok ? { ok: true, state: noteBuys(r.state, 1, now) } : r;
       });
     }
 
     case '/api/prestige':
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = doPrestige(s, data, now);
         return r.ok ? { ok: true, state: r.state, extra: { starsGained: r.starsGained } } : r;
       });
@@ -212,7 +237,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/prestige-buy': {
       if (typeof body.id !== 'string') return bad();
       const id = body.id;
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = buyPrestigeUpgrade(s, data, id);
         return r.ok ? { ok: true, state: r.state } : r;
       });
@@ -222,7 +247,7 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
       const kind = body.kind === 'boost' || body.kind === 'double' ? (body.kind as AdKind) : null;
       if (!kind) return bad();
       const id = (deps.newId ?? (() => crypto.randomUUID().replace(/-/g, '')))();
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = startAd(s, kind, now, id, deps.ads?.live ?? false);
         return r.ok ? { ok: true, state: r.state, extra: { ticket: r.ticket } } : r;
       });
@@ -231,14 +256,14 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/ad/claim': {
       if (typeof body.ticket !== 'string') return bad();
       const ticket = body.ticket;
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = claimAd(s, ticket, now, deps.ads?.live ?? false);
         return r.ok ? { ok: true, state: r.state, extra: { kind: r.kind, bonus: r.bonus } } : r;
       });
     }
 
     case '/api/streak':
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = claimStreak(s, data, now);
         return r.ok ? { ok: true, state: r.state, extra: { day: r.day, cash: r.cash, boostMinutes: r.boostMinutes } } : r;
       });
@@ -246,29 +271,29 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/quest/claim': {
       if (typeof body.id !== 'string') return bad();
       const id = body.id;
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = claimQuest(s, data, id, now);
         return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash, boostMinutes: r.boostMinutes } } : r;
       });
     }
 
     case '/api/tax/pay':
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = payTax(s, now);
         return r.ok ? { ok: true, state: r.state, extra: { cost: r.cost, bag: r.bag, mult: r.mult } } : r;
       });
 
     case '/api/tax/dodge':
-      return mutate(deps, user, (s) => dodgeTax(s, now));
+      return mut((s) => dodgeTax(s, now));
 
     case '/api/event/claim':
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = claimEvent(s, data, now);
         return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash, boostMinutes: r.boostMinutes, name: r.name } } : r;
       });
 
     case '/api/bag':
-      return mutate(deps, user, (s) => {
+      return mut((s) => {
         const r = claimBag(s, data, now);
         return r.ok ? { ok: true, state: r.state, extra: { cash: r.cash } } : r;
       });
@@ -281,10 +306,65 @@ export async function handleApi(req: Request, deps: ApiDeps): Promise<Response> 
     case '/api/admin/reset-me': {
       // Owner-only: restart the game for testing. Ad counters are kept.
       if (!deps.admin?.ids.includes(user.id)) return json({ ok: false, error: 'forbidden' }, 403);
-      return mutate(deps, user, (s) => ({
+      return mut((s) => ({
         ok: true,
         state: { ...newState(now), lifetimeAds: s.lifetimeAds, lastAdAt: s.lastAdAt },
       }));
+    }
+
+    case '/api/guild/create': {
+      const name = cleanGuildName(body.name);
+      if (!name) return json({ ok: false, error: 'bad_name' });
+      const me = await deps.store.get(user.id);
+      if (me?.state.guildId) return json({ ok: false, error: 'in_guild' });
+      const rand = deps.rand ?? Math.random;
+      let code = '';
+      for (let i = 0; i < 6 && !code; i++) {
+        const c = guildCode(rand);
+        if (await deps.store.createGuild(c, name, user.id, now)) code = c;
+      }
+      if (!code) return json({ ok: false, error: 'try_again' });
+      return mut((s) => ({ ok: true, state: { ...s, guildId: code, guildSize: 1 }, extra: { code } }));
+    }
+
+    case '/api/guild/join': {
+      const code = typeof body.code === 'string' ? body.code.trim().toUpperCase() : '';
+      if (!/^[A-Z0-9]{5}$/.test(code)) return json({ ok: false, error: 'bad_code' });
+      const me = await deps.store.get(user.id);
+      if (me?.state.guildId) return json({ ok: false, error: 'in_guild' });
+      if (!(await deps.store.getGuild(code))) return json({ ok: false, error: 'no_guild' });
+      const size = await deps.store.guildCount(code);
+      if (size >= GUILD_MAX) return json({ ok: false, error: 'guild_full' });
+      return mut((s) => ({ ok: true, state: { ...s, guildId: code, guildSize: size + 1 } }));
+    }
+
+    case '/api/guild/leave':
+      return mut((s) => (s.guildId ? { ok: true, state: { ...s, guildId: '', guildSize: 0 } } : { ok: false, error: 'not_ready' }));
+
+    case '/api/guild/info': {
+      const wk = weekIndex(now);
+      const row = await deps.store.get(user.id);
+      const top = await deps.store.topGuilds(wk, 10);
+      const topOut = top.map((g) => ({ id: g.id, name: g.name, pts: Math.round(g.pts), active: g.active }));
+      const gid = row?.state.guildId ?? '';
+      if (!gid) return json({ ok: true, guild: null, top: topOut });
+      const [g, size, members] = await Promise.all([deps.store.getGuild(gid), deps.store.guildCount(gid), deps.store.guildMembers(gid, wk, GUILD_MAX)]);
+      const pts = members.reduce((a, m) => a + m.pts, 0);
+      return json({
+        ok: true,
+        guild: {
+          id: gid,
+          name: g?.name ?? gid,
+          size,
+          max: GUILD_MAX,
+          perk: guildPerk(size),
+          pts: Math.round(pts),
+          rank: await deps.store.guildRank(pts, wk),
+          mine: Math.round(row && row.state.wk === wk ? row.state.wPts : 0),
+          members: members.map((m) => ({ name: m.name, pts: Math.round(m.pts) })),
+        },
+        top: topOut,
+      });
     }
 
     case '/api/leaderboard': {

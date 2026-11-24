@@ -1,3 +1,4 @@
+import { guildPerk } from './league.ts';
 import type {
   AssetDef,
   GameData,
@@ -63,6 +64,10 @@ export function newState(now: number): GameState {
     taxMult: 0,
     taxExp: 0,
     taxNextAt: 0,
+    guildId: '',
+    guildSize: 0,
+    wk: 0,
+    wPts: 0,
     notifyOff: false,
   };
 }
@@ -107,7 +112,7 @@ export function isAssetUnlocked(state: GameState, asset: AssetDef): boolean {
 
 // ---- Income and taps --------------------------------------------------------
 export function incomeMultiplier(state: GameState, data: GameData): number {
-  let m = 1 + STAR_BONUS_PER_STAR * Math.sqrt(state.lifetimeStars);
+  let m = (1 + STAR_BONUS_PER_STAR * Math.sqrt(state.lifetimeStars)) * (1 + guildPerk(state.guildId ? state.guildSize : 0));
   for (const u of ownedUpgrades(state, data)) {
     if (u.type === 'income_mult' && u.targetAssetId === 0) m *= u.value;
   }

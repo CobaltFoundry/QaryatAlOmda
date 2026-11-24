@@ -49,6 +49,13 @@ export interface Store {
   addAdEvent(e: AdEvent): Promise<boolean>;
   /** Players whose last save was between `from` and `to` (ms), not muted, not yet notified since. */
   listIdle(from: number, to: number, limit: number): Promise<PlayerRow[]>;
+  createGuild(id: string, name: string, owner: number, now: number): Promise<boolean>;
+  getGuild(id: string): Promise<{ id: string; name: string; owner: number } | null>;
+  guildCount(id: string): Promise<number>;
+  /** Members with this week's score (0 if they have not played this week). */
+  guildMembers(id: string, wk: number, limit: number): Promise<{ name: string; pts: number }[]>;
+  topGuilds(wk: number, limit: number): Promise<{ id: string; name: string; pts: number; active: number }[]>;
+  guildRank(pts: number, wk: number): Promise<number>;
   /** How many players this one invited and their combined lifetime earnings. */
   invitees(referrerId: number): Promise<{ count: number; lifetime: number }>;
   getMeta(key: string): Promise<string | null>;
@@ -84,6 +91,22 @@ const SCHEMA = [
     PRIMARY KEY (ymid, event)
   )`,
   'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)',
+  `CREATE TABLE IF NOT EXISTS guilds (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+];
+// Columns added after the first release. Each runs once; "duplicate column" means it already exists.
+const MIGRATIONS = [
+  'ALTER TABLE players ADD COLUMN guild TEXT',
+  'ALTER TABLE players ADD COLUMN wk INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE players ADD COLUMN wpts REAL NOT NULL DEFAULT 0',
+];
+const AFTER_MIGRATIONS = [
+  'CREATE INDEX IF NOT EXISTS idx_players_guild ON players (guild, wk)',
+  'CREATE INDEX IF NOT EXISTS idx_players_week ON players (wk, guild)',
 ];
 
 export class D1Store implements Store {
@@ -95,6 +118,14 @@ export class D1Store implements Store {
   /** Creates the tables if missing. Cheap; call once per isolate. */
   async ensureSchema(): Promise<void> {
     for (const sql of SCHEMA) await this.db.prepare(sql).run();
+    for (const sql of MIGRATIONS) {
+      try {
+        await this.db.prepare(sql).run();
+      } catch {
+        // column already there
+      }
+    }
+    for (const sql of AFTER_MIGRATIONS) await this.db.prepare(sql).run();
   }
 
   async get(userId: number): Promise<PlayerRow | null> {
@@ -109,9 +140,9 @@ export class D1Store implements Store {
   async create(userId: number, name: string, state: GameState, referrer: number | null, now: number): Promise<boolean> {
     const r = await this.db
       .prepare(
-        'INSERT OR IGNORE INTO players (user_id, name, state, version, lifetime, referrer, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)',
+        'INSERT OR IGNORE INTO players (user_id, name, state, version, lifetime, referrer, created_at, updated_at, guild, wk, wpts) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .bind(userId, name, JSON.stringify(state), state.lifetimeEarned, referrer, now, now)
+      .bind(userId, name, JSON.stringify(state), state.lifetimeEarned, referrer, now, now, state.guildId || null, state.wk, state.wPts)
       .run();
     return (r.meta?.changes ?? 0) === 1;
   }
@@ -119,9 +150,9 @@ export class D1Store implements Store {
   async save(row: PlayerRow, now: number): Promise<boolean> {
     const r = await this.db
       .prepare(
-        'UPDATE players SET name = ?, state = ?, lifetime = ?, version = version + 1, updated_at = ? WHERE user_id = ? AND version = ?',
+        'UPDATE players SET name = ?, state = ?, lifetime = ?, version = version + 1, updated_at = ?, guild = ?, wk = ?, wpts = ? WHERE user_id = ? AND version = ?',
       )
-      .bind(row.name, JSON.stringify(row.state), row.state.lifetimeEarned, now, row.userId, row.version)
+      .bind(row.name, JSON.stringify(row.state), row.state.lifetimeEarned, now, row.state.guildId || null, row.state.wk, row.state.wPts, row.userId, row.version)
       .run();
     return (r.meta?.changes ?? 0) === 1;
   }
@@ -150,6 +181,43 @@ export class D1Store implements Store {
       .bind(e.ymid, e.event, e.userId, e.priceUsd, e.createdAt)
       .run();
     return (r.meta?.changes ?? 0) === 1;
+  }
+  async createGuild(id: string, name: string, owner: number, now: number): Promise<boolean> {
+    const r = await this.db.prepare('INSERT OR IGNORE INTO guilds (id, name, owner, created_at) VALUES (?, ?, ?, ?)').bind(id, name, owner, now).run();
+    return (r.meta?.changes ?? 0) === 1;
+  }
+  async getGuild(id: string) {
+    const r = await this.db.prepare('SELECT id, name, owner FROM guilds WHERE id = ?').bind(id).first<{ id: string; name: string; owner: number }>();
+    return r ?? null;
+  }
+  async guildCount(id: string): Promise<number> {
+    const r = await this.db.prepare('SELECT COUNT(*) AS c FROM players WHERE guild = ?').bind(id).first<{ c: number }>();
+    return r?.c ?? 0;
+  }
+  async guildMembers(id: string, wk: number, limit: number) {
+    const r = await this.db
+      .prepare('SELECT name, CASE WHEN wk = ? THEN wpts ELSE 0 END AS pts FROM players WHERE guild = ? ORDER BY pts DESC LIMIT ?')
+      .bind(wk, id, limit)
+      .all<{ name: string; pts: number }>();
+    return r.results.map((x) => ({ name: x.name, pts: x.pts }));
+  }
+  async topGuilds(wk: number, limit: number) {
+    const r = await this.db
+      .prepare(
+        `SELECT g.id AS id, g.name AS name, SUM(p.wpts) AS pts, COUNT(*) AS active
+         FROM players p JOIN guilds g ON g.id = p.guild WHERE p.wk = ?
+         GROUP BY g.id ORDER BY pts DESC LIMIT ?`,
+      )
+      .bind(wk, limit)
+      .all<{ id: string; name: string; pts: number; active: number }>();
+    return r.results;
+  }
+  async guildRank(pts: number, wk: number): Promise<number> {
+    const r = await this.db
+      .prepare('SELECT COUNT(*) AS c FROM (SELECT guild FROM players WHERE wk = ? AND guild IS NOT NULL GROUP BY guild HAVING SUM(wpts) > ?)')
+      .bind(wk, pts)
+      .first<{ c: number }>();
+    return (r?.c ?? 0) + 1;
   }
   async invitees(referrerId: number): Promise<{ count: number; lifetime: number }> {
     const r = await this.db
@@ -202,6 +270,47 @@ export class MemoryStore implements Store {
     this.touched.set(userId, now);
     this.rows.set(userId, structuredClone({ userId, name, state, version: 0, referrer }));
     return true;
+  }
+  guilds = new Map<string, { id: string; name: string; owner: number }>();
+  async createGuild(id: string, name: string, owner: number) {
+    if (this.guilds.has(id)) return false;
+    this.guilds.set(id, { id, name, owner });
+    return true;
+  }
+  async getGuild(id: string) {
+    return this.guilds.get(id) ?? null;
+  }
+  private members(id: string) {
+    return [...this.rows.values()].filter((r) => r.state.guildId === id);
+  }
+  async guildCount(id: string) {
+    return this.members(id).length;
+  }
+  async guildMembers(id: string, wk: number, limit: number) {
+    return this.members(id)
+      .map((r) => ({ name: r.name, pts: r.state.wk === wk ? r.state.wPts : 0 }))
+      .sort((a, b) => b.pts - a.pts)
+      .slice(0, limit);
+  }
+  private totals(wk: number) {
+    const t = new Map<string, { pts: number; active: number }>();
+    for (const r of this.rows.values()) {
+      if (!r.state.guildId || r.state.wk !== wk) continue;
+      const c = t.get(r.state.guildId) ?? { pts: 0, active: 0 };
+      c.pts += r.state.wPts;
+      c.active++;
+      t.set(r.state.guildId, c);
+    }
+    return t;
+  }
+  async topGuilds(wk: number, limit: number) {
+    return [...this.totals(wk)]
+      .map(([id, c]) => ({ id, name: this.guilds.get(id)?.name ?? id, pts: c.pts, active: c.active }))
+      .sort((a, b) => b.pts - a.pts)
+      .slice(0, limit);
+  }
+  async guildRank(pts: number, wk: number) {
+    return [...this.totals(wk).values()].filter((c) => c.pts > pts).length + 1;
   }
   async invitees(referrerId: number) {
     const rows = [...this.rows.values()].filter((r) => r.referrer === referrerId);

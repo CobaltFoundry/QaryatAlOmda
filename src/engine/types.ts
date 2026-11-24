@@ -111,6 +111,11 @@ export interface GameState {
   taxMult: number;
   taxExp: number;
   taxNextAt: number;
+  /** Guild code ('' = none), cached member count, and this week's activity score. */
+  guildId: string;
+  guildSize: number;
+  wk: number;
+  wPts: number;
   /** True after /mute or when Telegram says the bot was blocked. */
   notifyOff: boolean;
 }

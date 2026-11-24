@@ -7,7 +7,7 @@ const BOT_USERNAME = 'QaryatAlOmdaBot';
 /** Asset pictures live in /img/assets/<key>.<ext>. Missing ones fall back to the drawn icon. */
 const ASSET_IMAGES = true;
 const ASSET_IMAGE_EXT = 'jpg';
-const APP_VERSION = '0.13';
+const APP_VERSION = '0.14.1';
 
 // Remember which pictures do not exist (for a day) so we do not request them again and again.
 const MISS_KEY = 'omda_img_miss_v1';
@@ -159,6 +159,12 @@ const ERRORS = {
   bad_ticket: () => 'الإعلان ماتحسبش، جرب تاني',
   too_early: () => 'لازم تكمل الإعلان للآخر',
   expired: () => 'الإعلان خلص وقته، جرب تاني',
+  bad_name: () => 'اسم الشلة لازم يكون من ٢ لـ ٢٠ حرف',
+  in_guild: () => 'انت في شلة أصلاً',
+  no_guild: () => 'مفيش شلة بالكود ده',
+  bad_code: () => 'الكود ٥ حروف أو أرقام',
+  guild_full: () => 'الشلة اتملت (٢٠ عضو)',
+  try_again: () => 'جرب تاني',
 };
 
 async function act(path, body) {
@@ -359,7 +365,75 @@ function renderPrestige() {
   );
 }
 
+let rankMode = 'p';
+function setRankMode(m) {
+  rankMode = m;
+  $('#segP').classList.toggle('on', m === 'p');
+  $('#segG').classList.toggle('on', m === 'g');
+  $('#rankList').hidden = m !== 'p';
+  $('#guildBox').hidden = m !== 'g';
+  renderRank();
+}
+$('#segP').addEventListener('click', () => setRankMode('p'));
+$('#segG').addEventListener('click', () => setRankMode('g'));
+
+async function renderGuild() {
+  const box = $('#guildBox');
+  box.replaceChildren(h('div', { class: 'card', text: 'بحمّل الشلل...' }));
+  let r;
+  try {
+    r = await call('/api/guild/info');
+  } catch {
+    return;
+  }
+  if (!r.ok) return;
+  const g = r.guild;
+  const topRows = r.top.map((t, i) =>
+    h(
+      'div',
+      { class: 'row rank' + (g && t.id === g.id ? ' me' : '') },
+      h('span', { class: 'pos', text: ar(i + 1) }),
+      h('div', { class: 'txt' }, h('b', { text: t.name }), h('small', { text: ar(t.pts) + ' نقطة الأسبوع ده' })),
+    ),
+  );
+  const topBlock = [h('h3', { class: 'sub', text: 'أحسن الشلل الأسبوع ده' }), ...(topRows.length ? topRows : [h('div', { class: 'card', text: 'لسه مفيش شلة اتحركت الأسبوع ده، كن أول واحد.' })])];
+  if (!g) {
+    const nameIn = h('input', { class: 'inp', maxlength: '20', placeholder: 'اسم الشلة' });
+    const codeIn = h('input', { class: 'inp', maxlength: '5', placeholder: 'كود الشلة', style: 'text-transform:uppercase;direction:ltr' });
+    box.replaceChildren(
+      h('div', { class: 'card' }, h('b', { text: 'اعمل شلتك' }), h('small', { text: 'كل عضو بيزود دخل الكل ٢٪ (لحد ٢٠٪). لحد ٢٠ عضو.' }), nameIn,
+        h('button', { class: 'btn', text: 'اعمل شلة', onclick: async () => { const x = await act('/api/guild/create', { name: nameIn.value }); if (x) { toast('الشلة اتعملت! كودها ' + x.code); renderGuild(); } } })),
+      h('div', { class: 'card' }, h('b', { text: 'عندك كود؟' }), codeIn,
+        h('button', { class: 'btn', text: 'انضم', onclick: async () => { const x = await act('/api/guild/join', { code: codeIn.value }); if (x) { toast('نورت الشلة 🤝'); renderGuild(); } } })),
+      ...topBlock,
+    );
+    return;
+  }
+  const share = () => {
+    const uid = tg?.initDataUnsafe?.user?.id;
+    const link = `https://t.me/${BOT_USERNAME}` + (uid ? `?start=ref_${uid}` : '');
+    const text = `انضم لشلتي "${g.name}" في العمدة 👑 اكتب الكود ده في تاب الترتيب > الشلل: ${g.id}`;
+    const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+    if (tg?.openTelegramLink) tg.openTelegramLink(url);
+    else window.open(url, '_blank');
+  };
+  box.replaceChildren(
+    h('div', { class: 'card' },
+      h('b', { text: g.name }),
+      h('small', { text: 'الكود: ' + g.id + ' · ' + ar(g.size) + '/' + ar(g.max) + ' عضو · +' + ar(Math.round(g.perk * 100)) + '٪ دخل' }),
+      h('small', { text: 'ترتيبكم الأسبوع ده: ' + ar(g.rank) + ' · نقطك: ' + ar(g.mine) + ' · نقط الشلة: ' + ar(g.pts) }),
+      h('div', { class: 'taxbtns' },
+        h('button', { class: 'primary', text: 'ادعو صحابك', onclick: share }),
+        h('button', { text: 'اخرج', onclick: async () => { if (confirm('تخرج من الشلة؟')) { const x = await act('/api/guild/leave', {}); if (x) renderGuild(); } } }))),
+    h('h3', { class: 'sub', text: 'الأعضاء' }),
+    ...g.members.map((m, i) => h('div', { class: 'row rank' }, h('span', { class: 'pos', text: ar(i + 1) }), h('div', { class: 'txt' }, h('b', { text: m.name }), h('small', { text: ar(m.pts) + ' نقطة' })))),
+    ...topBlock,
+    h('small', { class: 'hint', text: 'النقط من الضغط والشراء والمهام والإعلانات. الأسبوع بيبدأ كل اتنين.' }),
+  );
+}
+
 async function renderRank() {
+  if (rankMode === 'g') return renderGuild();
   const list = $('#rankList');
   list.replaceChildren(h('div', { class: 'card', text: 'بحمّل الترتيب...' }));
   let r;

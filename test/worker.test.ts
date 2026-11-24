@@ -748,3 +748,106 @@ test('tax: dodging costs nothing, offers expire, and you need the cash', () => {
   assert.equal(payTax(s, NOW + 16 * 60_000).ok, false, 'expired');
   assert.equal(maybeOfferTax({ ...s, taxCost: 0, taxExp: 0 }, gameData, NOW, () => 0.1).taxCost, 50);
 });
+
+// ---- guilds ----
+import { incomeMultiplier } from '../src/engine/engine.ts';
+import { addPts, guildPerk, weekIndex } from '../src/engine/league.ts';
+
+test('guild: weeks start on Monday and the perk is capped', () => {
+  assert.equal(new Date(Date.UTC(2026, 10, 23)).getUTCDay(), 1); // Monday
+  assert.equal(weekIndex(Date.UTC(2026, 10, 23, 0, 0)), weekIndex(Date.UTC(2026, 10, 29, 23, 59)));
+  assert.equal(weekIndex(Date.UTC(2026, 10, 30, 0, 0)), weekIndex(Date.UTC(2026, 10, 23)) + 1);
+  assert.equal(guildPerk(1), 0);
+  assert.ok(Math.abs(guildPerk(5) - 0.08) < 1e-9);
+  assert.equal(guildPerk(20), 0.2);
+  const w1 = addPts(newState(NOW), 10, Date.UTC(2026, 10, 24));
+  assert.equal(addPts(w1, 5, Date.UTC(2026, 10, 25)).wPts, 15);
+  assert.equal(addPts(w1, 5, Date.UTC(2026, 11, 1)).wPts, 5, 'a new week starts from zero');
+});
+
+test('guild: create, join, score, rank, perk, leave', async () => {
+  const store = new MemoryStore();
+  let n = 0;
+  const rand = () => ((n++ * 0.137) % 1);
+  const call = async (id: number, path: string, body: unknown = {}, now = D0) => {
+    const auth = 'tma ' + (await initData(id, Math.floor(now / 1000)));
+    const res = await handleApi(
+      new Request('https://x.test' + path, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+      { store, botToken: TOKEN, now, data: gameData, rand, ads: { live: false, zone: '' } },
+    );
+    return (await res.json()) as any;
+  };
+  assert.equal((await call(1, '/api/guild/create', { name: 'x' })).error, 'bad_name');
+  const c = await call(1, '/api/guild/create', { name: 'شلة الباشوات' });
+  assert.equal(c.ok, true);
+  assert.match(c.code, /^[A-Z0-9]{5}$/);
+  assert.equal((await call(1, '/api/guild/create', { name: 'تاني' })).error, 'in_guild');
+  assert.equal((await call(2, '/api/guild/join', { code: 'ZZZZZ' })).error, 'no_guild');
+  assert.equal((await call(2, '/api/guild/join', { code: c.code.toLowerCase() })).ok, true);
+  assert.equal((await call(2, '/api/guild/join', { code: c.code })).error, 'in_guild');
+
+  // activity earns points: 100 taps = 20, a purchase = 20
+  await call(2, '/api/tap', { count: 5 }, D0 + 1000);
+  const info = await call(1, '/api/guild/info', {}, D0 + 2000);
+  assert.equal(info.guild.size, 2);
+  assert.equal(info.guild.name, 'شلة الباشوات');
+  assert.equal(info.guild.rank, 1);
+  assert.ok(info.guild.pts >= 1);
+  assert.equal(info.guild.members.length, 2);
+  assert.equal(info.top[0].name, 'شلة الباشوات');
+
+  // perk shows up in income after a sync
+  await call(1, '/api/sync', {}, D0 + 3000);
+  assert.equal(store.rows.get(1)!.state.guildSize, 2);
+  const st = store.rows.get(1)!.state;
+  assert.ok(Math.abs(incomeMultiplier(st, gameData) / incomeMultiplier({ ...st, guildSize: 1 }, gameData) - 1.02) < 1e-9);
+
+  assert.equal((await call(2, '/api/guild/leave', {}, D0 + 4000)).ok, true);
+  assert.equal((await call(2, '/api/guild/leave', {}, D0 + 5000)).error, 'not_ready');
+  assert.equal((await call(1, '/api/guild/info', {}, D0 + 6000)).guild.size, 1);
+});
+
+test('guild: a full guild refuses new members', async () => {
+  const store = new MemoryStore();
+  store.guilds.set('FULL1', { id: 'FULL1', name: 'x', owner: 1 });
+  for (let i = 0; i < 20; i++) await store.create(100 + i, 'p', { ...newState(NOW), guildId: 'FULL1', guildSize: 20 }, null, NOW);
+  const auth = 'tma ' + (await initData(5, Math.floor(NOW / 1000)));
+  const res = await handleApi(
+    new Request('https://x.test/api/guild/join', { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify({ code: 'FULL1' }) }),
+    { store, botToken: TOKEN, now: NOW, data: gameData, ads: { live: false, zone: '' } },
+  );
+  assert.equal(((await res.json()) as any).error, 'guild_full');
+});
+
+test('guild: the real SQL (migration, scores, ranking) matches', async () => {
+  const db = new DatabaseSync(':memory:');
+  const store = new D1Store(sqliteD1(db));
+  await store.ensureSchema();
+  await store.ensureSchema(); // migrations are safe to repeat
+  const wk = weekIndex(NOW);
+  assert.equal(await store.createGuild('AAAAA', 'أ', 1, NOW), true);
+  assert.equal(await store.createGuild('AAAAA', 'تاني', 1, NOW), false);
+  assert.equal(await store.createGuild('BBBBB', 'ب', 2, NOW), true);
+  await store.create(1, 'u1', { ...newState(NOW), guildId: 'AAAAA', wk, wPts: 100 }, null, NOW);
+  await store.create(2, 'u2', { ...newState(NOW), guildId: 'AAAAA', wk, wPts: 50 }, null, NOW);
+  await store.create(3, 'u3', { ...newState(NOW), guildId: 'BBBBB', wk, wPts: 120 }, null, NOW);
+  await store.create(4, 'u4', { ...newState(NOW), guildId: 'BBBBB', wk: wk - 1, wPts: 999 }, null, NOW); // last week: ignored
+  assert.equal(await store.guildCount('AAAAA'), 2);
+  assert.deepEqual((await store.topGuilds(wk, 5)).map((g) => [g.id, g.pts]), [['AAAAA', 150], ['BBBBB', 120]]);
+  assert.equal(await store.guildRank(120, wk), 2);
+  assert.equal(await store.guildRank(150, wk), 1);
+  assert.deepEqual(await store.guildMembers('BBBBB', wk, 10), [{ name: 'u3', pts: 120 }, { name: 'u4', pts: 0 }]);
+  // saving writes the columns
+  const row = (await store.get(2))!;
+  await store.save({ ...row, state: { ...row.state, wPts: 500 } }, NOW);
+  assert.equal((await store.topGuilds(wk, 5))[0].pts, 600);
+});
+
+test('bot setup: sets the descriptions within Telegram limits', async () => {
+  const { BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION, setupBot } = await import('../src/worker/bot.ts');
+  assert.ok([...BOT_DESCRIPTION].length <= 512);
+  assert.ok([...BOT_SHORT_DESCRIPTION].length <= 120);
+  const calls: string[] = [];
+  await setupBot('https://x.dev', 's', async (m: string) => (calls.push(m), { ok: true }));
+  assert.ok(calls.includes('setMyDescription') && calls.includes('setMyShortDescription'));
+});

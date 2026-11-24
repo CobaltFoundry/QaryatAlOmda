@@ -129,6 +129,17 @@ export async function handleUpdate(update: TgUpdate, deps: BotDeps): Promise<voi
 }
 
 /** Registers the webhook, the menu button and the command list. Safe to run repeatedly. */
+/** Shown when someone opens the bot for the first time (Telegram allows up to 512 characters). */
+export const BOT_DESCRIPTION = `ابدأ بتوك توك وخلّيك العمدة 👑
+اضغط على العمدة، اشتري عربية فول وتاكسي وفيلا ويخت، والفلوس تفضل تجري حتى وانت نايم 😴
+• توريث الكرسي ولقب أكبر كل مرة
+• شلة مع صحابك وترتيب أسبوعي
+• مهام وهدايا كل يوم، ومطر دهب كل جمعة
+• جابي الضرايب ممكن يطلعلك جاكبوت 🎰
+لعبة مصرية ببلاش على تليجرام. اضغط ابدأ.`;
+/** Shown on the bot's profile and when it is shared (up to 120 characters). */
+export const BOT_SHORT_DESCRIPTION = 'لعبة العمدة 👑 ابدأ بتوك توك وخلّيك عمدة البلد. ببلاش وعلى تليجرام.';
+
 export async function setupBot(origin: string, webhookSecret: string, call: TgCall): Promise<Record<string, unknown>> {
   return {
     webhook: await call('setWebhook', {
@@ -148,5 +159,7 @@ export async function setupBot(origin: string, webhookSecret: string, call: TgCa
         { command: 'unmute', description: 'شغل التنبيهات' },
       ],
     }),
+    description: await call('setMyDescription', { description: BOT_DESCRIPTION }),
+    shortDescription: await call('setMyShortDescription', { short_description: BOT_SHORT_DESCRIPTION }),
   };
 }
